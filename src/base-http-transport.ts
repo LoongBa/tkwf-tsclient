@@ -74,7 +74,7 @@ export abstract class BaseHttpTransport implements Transport {
         response = await fetch(request.url, {
           method: request.method,
           headers: request.headers,
-          credentials: "include",
+          credentials: "same-origin",
           signal: ctx.signal,
           body: request.body || undefined,
         });

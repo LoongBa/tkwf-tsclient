@@ -237,7 +237,7 @@ export class DomainClientUser {
       requestChallenge: ChallengeResponse;
     }>({
       field: "requestChallenge",
-      type: "mutation",
+      type: "query",
       variables: { userName },
     });
 
@@ -281,7 +281,7 @@ export class DomainClientUser {
       registerSecure: RegisterResult;
     }>({
       field: "registerSecure",
-      type: "mutation",
+      type: "query",
       variables: {
         input: {
           userName,
@@ -317,7 +317,7 @@ export class DomainClientUser {
     try {
       const result = await this.transport.execute<{ ping: PingResult }>({
         field: "ping",
-        type: "mutation",
+        type: "query",
         sessionKey: this.sessionKey ?? undefined,
         selection: "success isAuthenticated userName sessionKey",
       });
