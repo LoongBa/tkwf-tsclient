@@ -21,9 +21,10 @@ export abstract class BaseHttpTransport implements Transport {
   protected options: TransportOptions;
 
   constructor(options: TransportOptions) {
+    const defaultRetry = { maxAttempts: 3, baseDelaySeconds: 1, maxDelaySeconds: 10, jitter: true, retryOn: ["NETWORK_ERROR", "SERVER_ERROR"] as ErrorCode[] };
     this.options = {
-      retry: { maxAttempts: 3, baseDelaySeconds: 1, maxDelaySeconds: 10, jitter: true, retryOn: ["NETWORK_ERROR", "SERVER_ERROR"] as ErrorCode[] },
       ...options,
+      retry: options.retry ?? defaultRetry,
     };
   }
 
