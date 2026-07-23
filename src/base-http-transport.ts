@@ -89,9 +89,18 @@ export abstract class BaseHttpTransport implements Transport {
         throw err;
       }
 
+      // Read response body text first (needed for error code parsing)
+      const bodyText = await response.text();
+
       // HTTP status → canonical error code
-      if (response.status === 401)
-        throw new DomainClientError("Session expired", "AUTH_EXPIRED", 401);
+      if (response.status === 401) {
+        const errCode = toErrorCode(401, undefined, bodyText);
+        throw new DomainClientError(
+          errCode === "AUTH_REQUIRED" ? "未登录或会话已过期" :
+          errCode === "AUTH_FAILED" ? "登录失败，用户名或密码错误" :
+          "Session expired",
+          errCode, 401);
+      }
       if (response.status === 429)
         throw new DomainClientError("Rate limited", "RATE_LIMITED");
       if (!response.ok) {
@@ -99,7 +108,7 @@ export abstract class BaseHttpTransport implements Transport {
         throw new DomainClientError(`HTTP ${response.status}`, errCode);
       }
 
-      const json = await response.json();
+      const json = JSON.parse(bodyText);
       return this.parseResponse<T>(json, response.status);
     }, ctx.field);
 

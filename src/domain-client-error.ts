@@ -1,16 +1,17 @@
-/** Error codes for programmatic handling - never match on message strings */
+import {
+  ErrorCodes,
+  SERVER_CODE_MAP as GeneratedServerCodeMap,
+  type ErrorCode as ServerErrorCode,
+} from "./generated/error-codes";
+
+/** Client-side error codes (includes server codes + client-only codes) */
 export type ErrorCode =
-  | "NETWORK_ERROR"
+  | ServerErrorCode
   | "AUTH_EXPIRED"
-  | "AUTH_REQUIRED"
-  | "VALIDATION_ERROR"
   | "SERVER_ERROR"
-  | "NOT_FOUND"
-  | "CONFLICT"
   | "TIMEOUT"
   | "CANCELLED"
   | "RATE_LIMITED"
-  | "FORBIDDEN"
   | "UNKNOWN";
 
 /** Base error class for all RPC errors */
@@ -28,21 +29,30 @@ export class DomainClientError extends Error {
 
 /** Maps server-side GraphQL extensions.code values to canonical ErrorCode */
 const SERVER_CODE_MAP: Record<string, ErrorCode> = {
+  // Generated server codes (from DomainException.ErrorCodes)
+  ...GeneratedServerCodeMap,
+  // Legacy mapping: old servers send AUTH_FAILED for session expiration
   AUTH_FAILED: "AUTH_EXPIRED",
-  NOT_FOUND: "NOT_FOUND",
-  FORBIDDEN: "FORBIDDEN",
-  VALIDATION_ERROR: "VALIDATION_ERROR",
-  CONFLICT: "CONFLICT",
-  TIMEOUT: "TIMEOUT",
 };
 
 /** Map HTTP status + optional GraphQL errors to a canonical ErrorCode */
 export function toErrorCode(
   status: number,
   graphqlErrors?: unknown[],
+  responseBody?: string,
 ): ErrorCode {
   // HTTP status takes priority (wire-level errors before business-logic errors)
-  if (status === 401) return "AUTH_EXPIRED";
+  if (status === 401) {
+    // Try to distinguish AUTH_REQUIRED vs AUTH_FAILED from response body
+    if (responseBody) {
+      try {
+        const body = JSON.parse(responseBody);
+        if (body.errorCode === "AUTH_FAILED") return "AUTH_FAILED";
+        if (body.errorCode === "AUTH_REQUIRED") return "AUTH_REQUIRED";
+      } catch { /* ignore parse errors */ }
+    }
+    return "AUTH_EXPIRED";
+  }
   if (status === 403) return "FORBIDDEN";
   if (status === 409) return "CONFLICT";
   if (status === 429) return "RATE_LIMITED";
