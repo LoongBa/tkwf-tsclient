@@ -182,8 +182,9 @@ export class DomainHostClient {
       );
     }
 
+    // V4.8.7: 注册全局错误处理器
     if (this.globalErrorHandler) {
-      user._setGlobalErrorHandler(this.globalErrorHandler);
+      user.onGlobalError(this.globalErrorHandler);
     }
     this.startHeartbeat(user);
     return user;
@@ -199,8 +200,9 @@ export class DomainHostClient {
       selectionMap: this.selectionMap,
       useSecureLogin: this.useSecureLogin,
     });
+    // V4.8.7: 注册全局错误处理器
     if (this.globalErrorHandler) {
-      user._setGlobalErrorHandler(this.globalErrorHandler);
+      user.onGlobalError(this.globalErrorHandler);
     }
     return user;
   }

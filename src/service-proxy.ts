@@ -1,6 +1,6 @@
 import type { Transport } from "./transport";
 import { ChainablePromise, ChainableBuilder } from "./chainable";
-import type { DomainClientError } from "./domain-client-error";
+import { DomainClientError } from "./domain-client-error";
 
 const MUTATION_PREFIXES = [
   "create", "update", "delete", "add", "remove",
@@ -24,6 +24,8 @@ export interface ServiceProxyOptions {
   transport: Transport;
   sessionKey?: string | null;
   globalErrorHandler?: GlobalErrorHandler;
+  /** V4.8.7: 用户级错误处理回调，由 DomainClientUser.handleError 提供。 */
+  userErrorHandler?: (error: DomainClientError) => void;
   /** Map of GraphQL field names to their subfield selection strings.
    *  When provided, the proxy automatically appends `{ selection }` to each request.
    *  When omitted, the caller must provide `selection` directly in Transport.execute(). */
@@ -37,6 +39,7 @@ export class ServiceProxy {
   private transport: Transport;
   private sessionKey?: string | null;
   private globalErrorHandler?: GlobalErrorHandler;
+  private userErrorHandler?: (error: DomainClientError) => void;
   private selectionMap?: Record<string, string>;
   private explicitMutations?: ReadonlySet<string>;
 
@@ -44,6 +47,7 @@ export class ServiceProxy {
     this.transport = options.transport;
     this.sessionKey = options.sessionKey;
     this.globalErrorHandler = options.globalErrorHandler;
+    this.userErrorHandler = options.userErrorHandler;
     this.selectionMap = options.selectionMap;
     this.explicitMutations = options.explicitMutations;
   }
@@ -76,7 +80,13 @@ export class ServiceProxy {
                     signal: options?.signal,
                   })
                   .then(resolve)
-                  .catch(reject);
+                  .catch((error: unknown) => {
+                    // V4.8.7: 先触发用户级错误处理
+                    if (this.userErrorHandler && error instanceof DomainClientError) {
+                      this.userErrorHandler(error);
+                    }
+                    reject(error);
+                  });
               },
               this.globalErrorHandler,
             );
@@ -113,7 +123,13 @@ export class ServiceProxy {
                   signal: options?.signal,
                 })
                 .then(resolve)
-                .catch(reject);
+                .catch((error: unknown) => {
+                  // V4.8.7: 先触发用户级错误处理
+                  if (this.userErrorHandler && error instanceof DomainClientError) {
+                    this.userErrorHandler(error);
+                  }
+                  reject(error);
+                });
             });
           };
         },

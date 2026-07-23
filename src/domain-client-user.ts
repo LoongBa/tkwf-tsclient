@@ -65,6 +65,20 @@ export class DomainClientUser {
   userName: string | null = null;
   displayName: string | null = null;
 
+  // ── V4.8.7: 错误处理事件 ──
+
+  /** 认证过期/未登录。应用层应在此事件中跳转登录页。 */
+  onAuthRequired?: () => void;
+
+  /** 登录失败（用户名/密码错误）。应用层应在此事件中显示错误提示。 */
+  onAuthFailed?: () => void;
+
+  /** 通用服务端错误。应用层应在此事件中记录日志或显示 toast。 */
+  onServiceError?: (error: DomainClientError) => void;
+
+  /** 全局错误处理器集合（支持多消费者）。 */
+  private _globalErrorHandlers: Set<(error: DomainClientError) => void> = new Set();
+
   constructor(options: DomainClientUserOptions) {
     this.transport = options.transport;
     this.storage =
@@ -365,6 +379,47 @@ export class DomainClientUser {
     this.storage.removeItem(this.storageKey);
   }
 
+  // ── V4.8.7: 错误处理 ──
+
+  /** 注册全局错误处理器（支持多消费者）。 */
+  onGlobalError(handler: (error: DomainClientError) => void): this {
+    this._globalErrorHandlers.add(handler);
+    return this;
+  }
+
+  /** 移除全局错误处理器。 */
+  offGlobalError(handler: (error: DomainClientError) => void): void {
+    this._globalErrorHandlers.delete(handler);
+  }
+
+  /**
+   * V4.8.7: 处理 DomainClientError，分发到对应的事件。
+   * 由 ServiceProxy 在捕获到 DomainClientError 时调用。
+   */
+  handleError(error: DomainClientError): void {
+    // 1. 触发特定事件
+    switch (error.code) {
+      case "AUTH_REQUIRED":
+        this.onAuthRequired?.();
+        break;
+      case "AUTH_FAILED":
+        this.onAuthFailed?.();
+        break;
+      default:
+        this.onServiceError?.(error);
+        break;
+    }
+
+    // 2. 触发全局错误处理器
+    for (const handler of this._globalErrorHandlers) {
+      try {
+        handler(error);
+      } catch {
+        // 处理器异常不应影响其他处理器
+      }
+    }
+  }
+
   /** The transport instance (for Use/Call proxy to leverage) */
   getTransport(): Transport {
     return this.transport;
@@ -380,7 +435,10 @@ export class DomainClientUser {
     const proxy = new ServiceProxy({
       transport: this.transport,
       sessionKey: this.sessionKey,
-      globalErrorHandler: this._globalErrorHandler,
+      globalErrorHandler: this._globalErrorHandler.size > 0
+        ? (err) => this._globalErrorHandlers.forEach(h => { try { h(err); } catch { /* best-effort */ } })
+        : undefined,
+      userErrorHandler: (err) => this.handleError(err),
       explicitMutations: EXPLICIT_MUTATIONS,
       selectionMap: this.selectionMap,
     });
@@ -392,6 +450,7 @@ export class DomainClientUser {
     const proxy = new ServiceProxy({
       transport: this.transport,
       sessionKey: this.sessionKey,
+      userErrorHandler: (err) => this.handleError(err),
       explicitMutations: EXPLICIT_MUTATIONS,
       selectionMap: this.selectionMap,
     });
