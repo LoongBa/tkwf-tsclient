@@ -78,7 +78,7 @@ export class RestTransport extends BaseHttpTransport {
     signal?: AbortSignal;
     selection?: string;
   }): Promise<T> {
-    const { field, type, variables, sessionKey, signal } = operation;
+    const { field, type, variables, sessionKey, signal, selection } = operation;
 
     // Resolve URL path
     const urlPath = this.urlMap?.[field] ?? `${this.pathPrefix}/${field}`;
@@ -98,7 +98,18 @@ export class RestTransport extends BaseHttpTransport {
     let url: string;
     let body: string;
     if (method === "GET") {
-      const qs = QueryString.composite((variables ?? {}) as Record<string, unknown>);
+      const mergedVars = { ...(variables ?? {}) } as Record<string, unknown>;
+      if (selection) {
+        // GraphQL "{ Id Name Amount }" → REST "Id,Name,Amount" for ?fields
+        const fields = selection
+          .replace(/[{}]/g, "")
+          .replace(/,/g, " ")
+          .split(/\s+/)
+          .filter(Boolean)
+          .join(",");
+        mergedVars.fields = fields;
+      }
+      const qs = QueryString.composite(mergedVars);
       url = `${this.options.url}${urlPath}${qs}`;
       body = "";
     } else {
