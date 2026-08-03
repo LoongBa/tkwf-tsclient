@@ -5,6 +5,7 @@ function mockFetch(data: unknown, status = 200) {
   return vi.mocked(fetch).mockResolvedValueOnce({
     ok: status >= 200 && status < 300,
     status,
+    text: () => Promise.resolve(JSON.stringify(data)),
     json: () => Promise.resolve(data),
   } as Response);
 }
@@ -62,6 +63,38 @@ describe("RestTransport", () => {
 
       const headers = (fetchMock.mock.calls[0][1] as Record<string, unknown>).headers as Record<string, string>;
       expect(headers["X-Session-Key"]).toBe("sk_test");
+    });
+
+    it("converts GraphQL selection to ?fields query parameter", async () => {
+      const fetchMock = mockFetch({ items: [] });
+      const transport = new RestTransport({ url: "http://localhost:5000" });
+
+      await transport.execute({
+        field: "users",
+        type: "query",
+        selection: "{ Id Name Amount }",
+      });
+
+      const url = fetchMock.mock.calls[0][0] as string;
+      // URLSearchParams 将逗号编码为 %2C，服务端（ASP.NET Query）自动解码回逗号
+      expect(url).toContain("fields=Id%2CName%2CAmount");
+      expect(decodeURIComponent(url)).toContain("fields=Id,Name,Amount");
+    });
+
+    it("merges selection fields with existing variables", async () => {
+      const fetchMock = mockFetch({ items: [] });
+      const transport = new RestTransport({ url: "http://localhost:5000" });
+
+      await transport.execute({
+        field: "users",
+        type: "query",
+        variables: { page: 1 },
+        selection: "{Id,Name}",
+      });
+
+      const url = fetchMock.mock.calls[0][0] as string;
+      expect(url).toContain("page=1");
+      expect(decodeURIComponent(url)).toContain("fields=Id,Name");
     });
   });
 
@@ -143,7 +176,9 @@ describe("RestTransport", () => {
   describe("HTTP status handling (inherited from BaseHttpTransport)", () => {
     it("throws AUTH_EXPIRED on 401", async () => {
       vi.mocked(fetch).mockResolvedValueOnce({
-        ok: false, status: 401, json: () => Promise.resolve({}),
+        ok: false, status: 401,
+        text: () => Promise.resolve("{}"),
+        json: () => Promise.resolve({}),
       } as Response);
       const transport = new RestTransport({ url: "http://localhost:5000" });
 

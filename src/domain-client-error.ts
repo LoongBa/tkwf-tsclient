@@ -33,6 +33,8 @@ const SERVER_CODE_MAP: Record<string, ErrorCode> = {
   ...GeneratedServerCodeMap,
   // Legacy mapping: old servers send AUTH_FAILED for session expiration
   AUTH_FAILED: "AUTH_EXPIRED",
+  // Server extensions.code aliases
+  TIMEOUT: "TIMEOUT",
 };
 
 /** Map HTTP status + optional GraphQL errors to a canonical ErrorCode */

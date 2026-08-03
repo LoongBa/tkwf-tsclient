@@ -6,12 +6,17 @@ function mockFetch(data: unknown, status = 200) {
   return vi.mocked(fetch).mockResolvedValueOnce({
     ok: status >= 200 && status < 300,
     status,
+    text: () => Promise.resolve(JSON.stringify(data)),
     json: () => Promise.resolve(data),
   } as Response);
 }
 
 function mockFetchResponse(response: Partial<Response>) {
-  return vi.mocked(fetch).mockResolvedValueOnce(response as Response);
+  // base-http-transport 通过 response.text() + JSON.parse 读取 body
+  return vi.mocked(fetch).mockResolvedValueOnce({
+    text: () => Promise.resolve("{}"),
+    ...response,
+  } as Response);
 }
 
 describe("GraphQLTransport", () => {
@@ -195,7 +200,7 @@ describe("GraphQLTransport", () => {
     it("falls back to UNKNOWN for unmapped error code", async () => {
       mockFetch({
         data: null,
-        errors: [{ message: "something weird", extensions: { code: "INTERNAL_ERROR" } }],
+        errors: [{ message: "something weird", extensions: { code: "SOMETHING_UNMAPPED" } }],
       });
       const transport = new GraphQLTransport({ url: "/graphql" });
 
@@ -245,6 +250,7 @@ describe("GraphQLTransport", () => {
         .mockResolvedValueOnce({
           ok: true,
           status: 200,
+          text: () => Promise.resolve(JSON.stringify({ data: { ok: true } })),
           json: () => Promise.resolve({ data: { ok: true } }),
         } as Response);
 
@@ -343,7 +349,9 @@ describe("GraphQLTransport", () => {
       vi.mocked(fetch)
         .mockRejectedValueOnce(new TypeError("fail"))
         .mockResolvedValueOnce({
-          ok: true, status: 200, json: () => Promise.resolve({ data: { ok: true } }),
+          ok: true, status: 200,
+        text: () => Promise.resolve(JSON.stringify({ data: { ok: true } })),
+        json: () => Promise.resolve({ data: { ok: true } }),
         } as Response);
 
       const transport = new GraphQLTransport({

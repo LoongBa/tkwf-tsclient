@@ -331,7 +331,7 @@ export class DomainClientUser {
     try {
       const result = await this.transport.execute<{ ping: PingResult }>({
         field: "ping",
-        type: "query",
+        type: "mutation", // ping 在 EXPLICIT_MUTATIONS 中，属 mutation 类
         sessionKey: this.sessionKey ?? undefined,
         selection: "success isAuthenticated userName sessionKey",
       });
@@ -435,7 +435,7 @@ export class DomainClientUser {
     const proxy = new ServiceProxy({
       transport: this.transport,
       sessionKey: this.sessionKey,
-      globalErrorHandler: this._globalErrorHandler.size > 0
+      globalErrorHandler: this._globalErrorHandlers.size > 0
         ? (err) => this._globalErrorHandlers.forEach(h => { try { h(err); } catch { /* best-effort */ } })
         : undefined,
       userErrorHandler: (err) => this.handleError(err),
