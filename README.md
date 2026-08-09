@@ -56,6 +56,7 @@ const result = await user.mutate("createProduct", { name: "test" });
 |----------|-----------|----------|
 | `query` | GET | `{url}{pathPrefix}/{field}?{variables}` |
 | `mutation` | POST | `{url}{pathPrefix}/{field}` (JSON body) |
+| `query` + `explicitBodyQueries` | GET | `{url}{pathPrefix}/{field}` (JSON body) |
 
 可通过 `restUrlMap` 覆盖特定字段的 URL 路径：
 
@@ -69,6 +70,20 @@ const host = DomainHostClient.init("my-app", {
   },
 });
 ```
+
+#### GET + JSON body（V4.9.19）
+
+当服务端 GET 端点使用 `[FromBody]` 绑定复杂 DTO 参数（SG2 生成的 REST 端点），客户端需配置 `restExplicitBodyQueries` 告知 RestTransport 对指定 query 字段发送 GET + JSON body：
+
+```typescript
+const host = DomainHostClient.init("my-app", {
+  endpoint: "http://localhost:5000",
+  transportType: "rest",
+  restExplicitBodyQueries: new Set(["getMyCoupons", "getClaimCenter", "getExchange"]),
+});
+```
+
+行为：variables 序列化为 JSON body（`Content-Type: application/json`），`?fields` 投影仍走 query string。
 
 ---
 

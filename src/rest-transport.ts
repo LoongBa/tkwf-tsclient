@@ -28,6 +28,26 @@ export interface RestTransportOptions extends TransportOptions {
    * ```
    */
   urlMap?: Record<string, string>;
+
+  /**
+   * V4.9.19: Query field names that should send GET + JSON body.
+   *
+   * When a query operation's field is in this set, its `variables` are
+   * serialized as a JSON **body** instead of a query string, while the HTTP
+   * method stays `GET` (and `Content-Type: application/json` is set).
+   *
+   * This is required for server-side `[FromBody]` on GET endpoints
+   * (SG2 generated REST endpoints with a single complex DTO parameter).
+   *
+   * `selection` (`?fields`, projection) still goes to the query string even
+   * for body-queries, so projection semantics are preserved.
+   *
+   * Example:
+   * ```ts
+   * explicitBodyQueries: new Set(["getMyCoupons", "getClaimCenter", "getExchange"])
+   * ```
+   */
+  explicitBodyQueries?: ReadonlySet<string>;
 }
 
 /**
@@ -63,11 +83,13 @@ export interface RestTransportOptions extends TransportOptions {
 export class RestTransport extends BaseHttpTransport {
   private pathPrefix: string;
   private urlMap?: Record<string, string>;
+  private explicitBodyQueries?: ReadonlySet<string>;
 
   constructor(options: RestTransportOptions) {
     super(options);
     this.pathPrefix = options.pathPrefix ?? "/api";
     this.urlMap = options.urlMap;
+    this.explicitBodyQueries = options.explicitBodyQueries;
   }
 
   async execute<T>(operation: {
@@ -86,10 +108,14 @@ export class RestTransport extends BaseHttpTransport {
     // Map operation type → HTTP method
     const method: string = type === "query" ? "GET" : "POST";
 
+    // V4.9.19: 检查该 query 字段是否应发送 GET + JSON body
+    const getWithBody = type === "query" && this.explicitBodyQueries?.has(field) === true;
+
     // Headers
     const headers: Record<string, string> = {};
     if (sessionKey) headers["X-Session-Key"] = sessionKey;
-    if (method !== "GET") headers["Content-Type"] = "application/json";
+    // POST 始终需要 Content-Type；GET + body 也需要
+    if (method !== "GET" || getWithBody) headers["Content-Type"] = "application/json";
 
     const timestamp = new Date().toISOString();
     const ctx: RequestContext = { field, type, variables, signal, timestamp };
@@ -97,27 +123,40 @@ export class RestTransport extends BaseHttpTransport {
     // Build URL and body
     let url: string;
     let body: string;
-    if (method === "GET") {
+    if (method === "GET" && !getWithBody) {
+      // 原有 GET 逻辑：variables → query string
       const mergedVars = { ...(variables ?? {}) } as Record<string, unknown>;
       if (selection) {
         // GraphQL "{ Id Name Amount }" → REST "Id,Name,Amount" for ?fields
-        const fields = selection
-          .replace(/[{}]/g, "")
-          .replace(/,/g, " ")
-          .split(/\s+/)
-          .filter(Boolean)
-          .join(",");
-        mergedVars.fields = fields;
+        mergedVars.fields = RestTransport.selectionToFields(selection);
       }
       const qs = QueryString.composite(mergedVars);
       url = `${this.options.url}${urlPath}${qs}`;
       body = "";
     } else {
+      // POST 或 GET + body：variables → JSON body
       url = `${this.options.url}${urlPath}`;
+      // V4.9.19: GET + body 时 selection(?fields) 仍走 query string 保持投影语义
+      if (getWithBody && selection) {
+        url += QueryString.composite({ fields: RestTransport.selectionToFields(selection) });
+      }
       body = JSON.stringify(variables ?? {});
     }
 
     return this.executeHttp<T>({ url, method, headers, body }, ctx);
+  }
+
+  /**
+   * V4.9.19: 将 GraphQL selection 字符串（如 "{ Id Name Amount }"）转换为
+   * REST ?fields 参数值（如 "Id,Name,Amount"）。
+   */
+  private static selectionToFields(selection: string): string {
+    return selection
+      .replace(/[{}]/g, "")
+      .replace(/,/g, " ")
+      .split(/\s+/)
+      .filter(Boolean)
+      .join(",");
   }
 
   protected parseResponse<T>(json: unknown, _status: number): T {

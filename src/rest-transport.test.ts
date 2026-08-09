@@ -98,6 +98,97 @@ describe("RestTransport", () => {
     });
   });
 
+  describe("GET + body (explicitBodyQueries)", () => {
+    const bodyQueries = new Set(["getMyCoupons"]);
+
+    it("sends GET with JSON body when field is in explicitBodyQueries", async () => {
+      const fetchMock = mockFetch({ items: [] });
+      const transport = new RestTransport({
+        url: "http://localhost:5000",
+        explicitBodyQueries: bodyQueries,
+      });
+
+      await transport.execute({
+        field: "getMyCoupons",
+        type: "query",
+        variables: { page: 1 },
+      });
+
+      const call = fetchMock.mock.calls[0];
+      expect(call[0]).toBe("http://localhost:5000/api/getMyCoupons");
+      expect(call[1]?.method).toBe("GET");
+      // variables → JSON body
+      const body = JSON.parse((call[1] as Record<string, unknown>).body as string);
+      expect(body).toEqual({ page: 1 });
+      // Content-Type 必须设置（GET + body 需要）
+      const headers = (call[1] as Record<string, unknown>).headers as Record<string, string>;
+      expect(headers["Content-Type"]).toBe("application/json");
+    });
+
+    it("keeps query string default when field NOT in explicitBodyQueries", async () => {
+      const fetchMock = mockFetch({ items: [] });
+      const transport = new RestTransport({
+        url: "http://localhost:5000",
+        explicitBodyQueries: bodyQueries,
+      });
+
+      await transport.execute({
+        field: "getProducts",
+        type: "query",
+        variables: { page: 1 },
+      });
+
+      const call = fetchMock.mock.calls[0];
+      const url = call[0] as string;
+      expect(url).toContain("page=1");
+      expect(call[1]?.method).toBe("GET");
+      // 非 body 查询 → body 为空（executeHttp 中空字符串被转为 undefined）
+      expect((call[1] as Record<string, unknown>).body).toBeUndefined();
+    });
+
+    it("keeps ?fields projection on query string for GET+body", async () => {
+      const fetchMock = mockFetch({ items: [] });
+      const transport = new RestTransport({
+        url: "http://localhost:5000",
+        explicitBodyQueries: bodyQueries,
+      });
+
+      await transport.execute({
+        field: "getMyCoupons",
+        type: "query",
+        variables: { page: 1 },
+        selection: "{ Id Name }",
+      });
+
+      const call = fetchMock.mock.calls[0];
+      const url = call[0] as string;
+      // ?fields 仍在 query string
+      expect(decodeURIComponent(url)).toContain("fields=Id,Name");
+      // variables 仍在 body（不混入 query string）
+      const body = JSON.parse((call[1] as Record<string, unknown>).body as string);
+      expect(body).toEqual({ page: 1 });
+    });
+
+    it("does not affect mutation POST", async () => {
+      const fetchMock = mockFetch({ ok: true });
+      const transport = new RestTransport({
+        url: "http://localhost:5000",
+        explicitBodyQueries: bodyQueries,
+      });
+
+      await transport.execute({
+        field: "createCoupon",
+        type: "mutation",
+        variables: { name: "x" },
+      });
+
+      const call = fetchMock.mock.calls[0];
+      expect(call[1]?.method).toBe("POST");
+      const body = JSON.parse((call[1] as Record<string, unknown>).body as string);
+      expect(body).toEqual({ name: "x" });
+    });
+  });
+
   describe("POST (mutation)", () => {
     it("sends POST request with JSON body", async () => {
       const fetchMock = mockFetch({ success: true });

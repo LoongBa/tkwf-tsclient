@@ -30,6 +30,12 @@ export interface DomainHostClientOptions {
   /** Explicit URL path overrides for REST transport. Only applies when transportType="rest". */
   restUrlMap?: Record<string, string>;
   /**
+   * V4.9.19: REST query field names that should send GET + JSON body.
+   * Passed through to `RestTransport.explicitBodyQueries`.
+   * Only applies when transportType="rest".
+   */
+  restExplicitBodyQueries?: ReadonlySet<string>;
+  /**
    * Storage implementation for session key persistence.
    *
    * Options:
@@ -71,6 +77,7 @@ export class DomainHostClient {
   private transportType: "graphql" | "rest";
   private restPathPrefix?: string;
   private restUrlMap?: Record<string, string>;
+  private restExplicitBodyQueries?: ReadonlySet<string>;
   private storage?: Storage;
   private retry?: DomainHostClientOptions["retry"];
   private selectionMap?: Record<string, string>;
@@ -100,6 +107,7 @@ export class DomainHostClient {
     this.transportType = options?.transportType ?? "graphql";
     this.restPathPrefix = options?.restPathPrefix;
     this.restUrlMap = options?.restUrlMap;
+    this.restExplicitBodyQueries = options?.restExplicitBodyQueries;
     this.storage = options?.storage;
     this.retry = options?.retry;
     this.selectionMap = options?.selectionMap;
@@ -265,6 +273,7 @@ export class DomainHostClient {
         ...opts,
         pathPrefix: this.restPathPrefix,
         urlMap: this.restUrlMap,
+        explicitBodyQueries: this.restExplicitBodyQueries,
       });
     }
 
