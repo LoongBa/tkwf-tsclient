@@ -146,6 +146,11 @@ export class RestTransport extends BaseHttpTransport {
     return this.executeHttp<T>({ url, method, headers, body }, ctx);
   }
 
+  // V4.9.20: QueryBuilder 是 GraphQL 专属能力，REST 模式不支持。
+  async executeRawGraphQL<T>(_query: string, _sessionKey?: string, _signal?: AbortSignal): Promise<T> {
+    throw new Error("QueryBuilder is GraphQL-only; REST transport does not support executeRawGraphQL.");
+  }
+
   /**
    * V4.9.19: 将 GraphQL selection 字符串（如 "{ Id Name Amount }"）转换为
    * REST ?fields 参数值（如 "Id,Name,Amount"）。

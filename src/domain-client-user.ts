@@ -3,6 +3,7 @@ import { DomainClientError } from "./domain-client-error";
 import { ServiceProxy } from "./service-proxy";
 import type { ChainablePromise, ChainableBuilder } from "./chainable";
 import { AuthCrypto, type AuthCryptoApi } from "./crypto";
+import { QueryBuilderBase, createQueryBuilder } from "./query-builder";
 
 export interface LoginPayload {
   success: boolean;
@@ -423,6 +424,19 @@ export class DomainClientUser {
   /** The transport instance (for Use/Call proxy to leverage) */
   getTransport(): Transport {
     return this.transport;
+  }
+
+  /** V4.9.20: 创建实体查询构建器（需先运行 codegen 注册 QueryBuilder 工厂）。 */
+  Query<TEntity = any>(
+    entityName: string,
+    resolverField?: string,
+  ): QueryBuilderBase<TEntity, any, any, any> {
+    return createQueryBuilder<TEntity>(
+      entityName,
+      this.transport,
+      this.sessionKey ?? undefined,
+      resolverField,
+    );
   }
 
   /** @internal Global error handler (set by DomainHostClient) */

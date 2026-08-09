@@ -33,3 +33,12 @@ export type { DomainHostClientOptions, PongHandler } from "./domain-host-client"
 // V4.5
 export { AuthCrypto, pbkdf2, hmac, randomSalt, bytesToHex, hexToBytes, base64ToBytes } from "./crypto";
 export type { AuthCryptoApi } from "./crypto";
+
+// V4.9.20 — QueryBuilder 链式查询
+export { QueryBuilderBase, deriveResolverField, registerQueryBuilder, createQueryBuilder, resetQueryBuilderRegistry, getQueryBuilderFactory, LeafNode, CompoundNode } from "./query-builder";
+export type { QueryBuilderFactory } from "./query-builder";
+export { PagedResponse, PageInfoData } from "./query-builder-types";
+export type {
+  PredicateNode, StringFieldOperators, NumberFieldOperators,
+  DateFieldOperators, BooleanFieldOperators, SortNode,
+} from "./query-builder-types";

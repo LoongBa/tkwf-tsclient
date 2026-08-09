@@ -49,6 +49,9 @@ export interface Transport {
     signal?: AbortSignal;
     selection?: string;
   }): Promise<T>;
+
+  /** V4.9.20: 执行原始 GraphQL 查询字符串（QueryBuilder 使用）。 */
+  executeRawGraphQL<T>(query: string, sessionKey?: string, signal?: AbortSignal): Promise<T>;
 }
 
 /**
@@ -118,6 +121,19 @@ export class GraphQLTransport extends BaseHttpTransport {
       );
     }
     return data as T;
+  }
+
+  // V4.9.20: 执行原始 GraphQL 查询字符串（QueryBuilder 使用）。
+  // 复用 BaseHttpTransport 的签名/拦截器/重试链路。
+  async executeRawGraphQL<T>(query: string, sessionKey?: string, signal?: AbortSignal): Promise<T> {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (sessionKey) headers["X-Session-Key"] = sessionKey;
+    const timestamp = new Date().toISOString();
+    const ctx: RequestContext = { field: "raw", type: "query", timestamp, signal };
+    return this.executeHttp<T>(
+      { url: this.options.url, method: "POST", headers, body: JSON.stringify({ query }) },
+      ctx,
+    );
   }
 }
 

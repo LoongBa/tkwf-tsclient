@@ -37,6 +37,9 @@ export abstract class BaseHttpTransport implements Transport {
     selection?: string;
   }): Promise<T>;
 
+  /** V4.9.20: 执行原始 GraphQL 查询字符串（QueryBuilder 使用）。 */
+  abstract executeRawGraphQL<T>(query: string, sessionKey?: string, signal?: AbortSignal): Promise<T>;
+
   /**
    * Execute an HTTP request through the full lifecycle.
    *
