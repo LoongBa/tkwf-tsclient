@@ -2,6 +2,8 @@
   "name": "@tkwf/tsclient",
   "version": "0.1.0",
   "author": "LoongBa",
+  "license": "MIT",
+  "description": "TypeScript Domain client SDK for TKWF — GraphQL / REST transport, RPC proxy, session management",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -18,6 +20,13 @@
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
     "prepublishOnly": "npm test && npm run build"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LoongBa/tkwf-tsclient.git"
   },
   "devDependencies": {
     "typescript": "^7.0.2",
