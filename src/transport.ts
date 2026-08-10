@@ -6,6 +6,9 @@ export interface RequestContext {
   field: string;
   type: "query" | "mutation";
   variables?: Record<string, unknown>;
+  /** V4.9.26: 显式变量 GraphQL 类型声明。用于对象/复杂输入类型（如 LoginContextInput），
+   * 默认 inferGraphQLType 对对象只能推断为 JSON，无法匹配 schema 的具体输入类型。 */
+  variableTypes?: Record<string, string>;
   signal?: AbortSignal;
   timestamp: string;
 }
@@ -45,6 +48,8 @@ export interface Transport {
     field: string;
     type: "query" | "mutation";
     variables?: Record<string, unknown>;
+    /** V4.9.26: 显式变量 GraphQL 类型声明。覆盖 inferGraphQLType 的自动推断（后者对 complex object 只能返回 JSON）。 */
+    variableTypes?: Record<string, string>;
     sessionKey?: string;
     signal?: AbortSignal;
     selection?: string;
@@ -69,17 +74,18 @@ export class GraphQLTransport extends BaseHttpTransport {
     field: string;
     type: "query" | "mutation";
     variables?: Record<string, unknown>;
+    variableTypes?: Record<string, string>;
     sessionKey?: string;
     signal?: AbortSignal;
     selection?: string;
   }): Promise<T> {
-    const { field, type, variables, sessionKey, signal, selection } = operation;
+    const { field, type, variables, variableTypes, sessionKey, signal, selection } = operation;
 
     // Build GraphQL document
     const varNames = variables ? Object.keys(variables) : [];
     const varDecl =
       varNames.length > 0
-        ? `(${varNames.map((v) => `$${v}: ${inferGraphQLType(variables![v])}`).join(", ")})`
+        ? `(${varNames.map((v) => `$${v}: ${variableTypes?.[v] ?? inferGraphQLType(variables![v])}`).join(", ")})`
         : "";
     const varPass =
       varNames.length > 0
@@ -96,7 +102,7 @@ export class GraphQLTransport extends BaseHttpTransport {
     if (sessionKey) headers["X-Session-Key"] = sessionKey;
 
     const timestamp = new Date().toISOString();
-    const ctx: RequestContext = { field, type, variables, signal, timestamp };
+    const ctx: RequestContext = { field, type, variables, variableTypes, signal, timestamp };
 
     return this.executeHttp<T>(
       {

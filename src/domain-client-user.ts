@@ -199,6 +199,7 @@ export class DomainClientUser {
     const result = await this.transport.execute<{ loginByContext: LoginPayload }>({
       field: "loginByContext",
       type: "mutation",
+      variableTypes: { input: "LoginContextInput!" },
       variables: {
         input: {
           userName,
@@ -298,6 +299,7 @@ export class DomainClientUser {
     }>({
       field: "registerSecure",
       type: "query",
+      variableTypes: { input: "RegisterSecureInput!" },
       variables: {
         input: {
           userName,

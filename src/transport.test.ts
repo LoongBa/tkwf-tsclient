@@ -76,6 +76,25 @@ describe("GraphQLTransport", () => {
       expect(body.query).toContain("password: $password");
       expect(body.variables).toEqual({ userName: "admin", password: "secret" });
     });
+
+    it("uses variableTypes to override inferred GraphQL type for complex objects", async () => {
+      const fetchMock = mockFetch({ data: { loginByContext: { success: true } } });
+      const transport = new GraphQLTransport({ url: "/graphql" });
+
+      await transport.execute({
+        field: "loginByContext",
+        type: "mutation",
+        variableTypes: { input: "LoginContextInput!" },
+        variables: { input: { userName: "admin", credential: "x", loginFrom: "PcWeb", authType: "Password" } },
+        selection: "success",
+      });
+
+      const body = JSON.parse(fetchMock.mock.calls[0][1]!.body as string);
+      expect(body.query).toContain("$input: LoginContextInput!");
+      expect(body.query).toContain("input: $input");
+      // 确认不是 JSON（默认 inferGraphQLType 对 object 返回 JSON）
+      expect(body.query).not.toContain("$input: JSON");
+    });
   });
 
   describe("HTTP status handling", () => {
