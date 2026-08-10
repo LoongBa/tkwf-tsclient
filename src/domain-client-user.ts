@@ -204,8 +204,8 @@ export class DomainClientUser {
         input: {
           userName,
           credential,
-          loginFrom: context?.loginFrom ?? "PcWeb",
-          authType: context?.authType ?? "Password",
+          loginFrom: context?.loginFrom ?? "PC_WEB",
+          authType: context?.authType ?? "PASSWORD",
           authInfo: context?.authInfo,
           deviceId: context?.deviceId,
         },
@@ -271,7 +271,7 @@ export class DomainClientUser {
     // Step 4: Submit via loginByContext with SecurePassword authType
     options?.onProgress?.("submitting");
     return this.loginByContext(userName, response, {
-      authType: "SecurePassword",
+      authType: "SECURE_PASSWORD",
       authInfo: challengeToken,
     });
   }
