@@ -439,9 +439,6 @@ export class DomainClientUser {
     );
   }
 
-  /** @internal Global error handler (set by DomainHostClient) */
-  private _globalErrorHandler?: (error: DomainClientError) => void;
-
   /** Create a Use() proxy for async/await-style API calls. */
   Use<TService = Record<string, (...args: unknown[]) => ChainablePromise<unknown>>>(
     _serviceName?: string,
@@ -472,13 +469,8 @@ export class DomainClientUser {
   }
 
   /**
-   * Set the global error handler.
-   * Called by DomainHostClient during GetUser()/GetGuest().
-   * @internal
+   * Create a Query-builder proxy for type-safe IQueryable chain queries.
    */
-  _setGlobalErrorHandler(handler: (error: DomainClientError) => void): void {
-    this._globalErrorHandler = handler;
-  }
 }
 
 /**

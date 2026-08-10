@@ -1,5 +1,4 @@
 import {
-  ErrorCodes,
   SERVER_CODE_MAP as GeneratedServerCodeMap,
   type ErrorCode as ServerErrorCode,
 } from "./generated/error-codes";
