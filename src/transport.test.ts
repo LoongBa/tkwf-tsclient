@@ -85,7 +85,7 @@ describe("GraphQLTransport", () => {
         field: "loginByContext",
         type: "mutation",
         variableTypes: { input: "LoginContextInput!" },
-        variables: { input: { userName: "admin", credential: "x", loginFrom: "PcWeb", authType: "Password" } },
+        variables: { input: { userName: "admin", credential: "x", loginFrom: "PC_WEB", authType: "PASSWORD" } },
         selection: "success",
       });
 

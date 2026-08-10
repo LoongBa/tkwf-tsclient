@@ -127,7 +127,7 @@ describe("DomainClientUser", () => {
         expect.objectContaining({
           field: "loginByContext",
           variables: expect.objectContaining({
-            input: expect.objectContaining({ authType: "SecurePassword" }),
+            input: expect.objectContaining({ authType: "SECURE_PASSWORD" }),
           }),
         }),
       );
