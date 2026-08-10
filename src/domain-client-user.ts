@@ -210,7 +210,6 @@ export class DomainClientUser {
           deviceId: context?.deviceId,
         },
       },
-      sessionKey: this.sessionKey ?? undefined,
       selection: "success userName displayName sessionKey accessToken refreshToken expiresAt deviceId",
     });
 
