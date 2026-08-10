@@ -11,7 +11,7 @@ TypeScript Domain 客户端 SDK，为 [TKWF](https://github.com/LoongBa/TKW.Fram
 // package.json
 {
   "dependencies": {
-    "@tkwf/tsclient": "^0.1.0"
+    "@tkwf/tsclient": "^1.0.0"
   }
 }
 ```
