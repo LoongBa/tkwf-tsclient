@@ -305,6 +305,7 @@ export class DomainClientUser {
           salt,
         },
       },
+      selection: "success message",
     });
 
     return result.registerSecure;
