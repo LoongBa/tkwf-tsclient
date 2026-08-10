@@ -254,6 +254,7 @@ export class DomainClientUser {
       field: "requestChallenge",
       type: "query",
       variables: { userName },
+      selection: "challengeToken salt iterations",
     });
 
     const { challengeToken, salt, iterations } = challenge.requestChallenge;
