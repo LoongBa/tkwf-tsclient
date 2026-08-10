@@ -1,4 +1,4 @@
-# @coffeedrunk/tsclient
+# @tkwf/tsclient
 
 TypeScript Domain 客户端 SDK，为 [TKWF](https://github.com/LoongBa/TKW.Framework) 框架设计的全功能前端客户端。
 同时支持 **GraphQL**（HotChocolate 服务端）和 **REST** 两种传输协议。
@@ -11,7 +11,7 @@ TypeScript Domain 客户端 SDK，为 [TKWF](https://github.com/LoongBa/TKW.Fram
 // package.json
 {
   "dependencies": {
-    "@coffeedrunk/tsclient": "^1.0.0"
+    "@tkwf/tsclient": "^1.0.0"
   }
 }
 ```
@@ -21,7 +21,7 @@ TypeScript Domain 客户端 SDK，为 [TKWF](https://github.com/LoongBa/TKW.Fram
 ### GraphQL 模式（默认）
 
 ```typescript
-import { DomainHostClient } from "@coffeedrunk/tsclient";
+import { DomainHostClient } from "@tkwf/tsclient";
 
 // 匿名访问
 const host = DomainHostClient.init("my-app", {
@@ -222,7 +222,7 @@ useEffect(() => {
 RestTransport 独占的文件上传能力（GraphQLTransport 不支持）：
 
 ```typescript
-import { RestTransport } from "@coffeedrunk/tsclient";
+import { RestTransport } from "@tkwf/tsclient";
 
 const transport = new RestTransport({
   url: "http://localhost:5000",
