@@ -9,6 +9,13 @@ import {
   resetQueryBuilderRegistry,
   CompoundNode,
   LeafNode,
+  createOperators,
+  createStringOps,
+  createNumberOps,
+  createDateOps,
+  createBooleanOps,
+  dummyAsc,
+  dummyDesc,
 } from "./query-builder";
 import type {
   PredicateNode,
@@ -73,103 +80,12 @@ class MockEntityQueryBuilder extends QueryBuilderBase<
     return ["id", "userName", "status", "amount", "createTime", "isDeleted"];
   }
 
-  protected compileGraphQL(): string {
-    const fields = this._fields.length > 0
-      ? this._fields.join(" ")
-      : this.defaultFields().join(" ");
-    const whereClause = this.buildWhereClause();
-    const orderClause = this.buildOrderClause();
-    const afterClause = this._afterCursor
-      ? `, after: "${this._afterCursor}"`
-      : "";
-    const pageInfo = this._cursorCache.size > 0 || this._afterCursor
-      ? " pageInfo { endCursor hasNextPage }"
-      : "";
-    return `query { mockEntity(first: ${this._pageSize}${afterClause}${whereClause}${orderClause}) { totalCount nodes { ${fields} }${pageInfo} } }`;
-  }
-
   protected createFieldsProxy(): MockEntityFields {
-    // 返回一个代理对象，每个属性访问返回对应的操作符对象
-    const proxy = new Proxy({} as MockEntityFields, {
-      get: (_target, prop: string | symbol) => {
-        const fieldName = typeof prop === "string" ? prop : "";
-        switch (fieldName) {
-          case "id": case "amount":
-            return createNumberOperators(fieldName, proxy);
-          case "userName": case "status":
-            return createStringOperators(fieldName, proxy);
-          case "createTime":
-            return createDateOperators(fieldName, proxy);
-          case "isDeleted":
-            return createBooleanOperators(fieldName, proxy);
-          default:
-            return createStringOperators(fieldName, proxy);
-        }
-      },
-    });
-    return proxy;
-  }
-
-  protected createOrderByProxy(): MockEntityOrderByFields {
-    return new Proxy({} as MockEntityOrderByFields, {
-      get: (_target, prop: string | symbol) => {
-        const field = typeof prop === "string" ? prop : "";
-        return {
-          field,
-          isDesc: false,
-          asc(): SortNode { return { field, isDesc: false, asc: this.asc as () => SortNode, desc: this.desc as () => SortNode }; },
-          desc(): SortNode { return { field, isDesc: true, asc: this.asc as () => SortNode, desc: this.desc as () => SortNode }; },
-        } as SortNode;
-      },
+    return this.createFieldsProxyFrom<MockEntityFields>({
+      id: "Long", userName: "String", status: "String",
+      amount: "Decimal", createTime: "DateTime", isDeleted: "Boolean",
     });
   }
-}
-
-// ── 操作符工厂（模拟 codegen 应生成的等价逻辑） ──
-
-function createStringOperators<TFields>(field: string, proxy: TFields): StringFieldOperators<TFields> {
-  return {
-    eq: (val) => new LeafNode(field, "eq", val, proxy),
-    neq: (val) => new LeafNode(field, "neq", val, proxy),
-    contains: (val) => new LeafNode(field, "contains", val, proxy),
-    startsWith: (val) => new LeafNode(field, "startsWith", val, proxy),
-    endsWith: (val) => new LeafNode(field, "endsWith", val, proxy),
-    in: (val) => new LeafNode(field, "in", val, proxy),
-    nin: (val) => new LeafNode(field, "nin", val, proxy),
-  };
-}
-
-function createNumberOperators<TFields>(field: string, proxy: TFields): NumberFieldOperators<TFields> {
-  return {
-    eq: (val) => new LeafNode(field, "eq", val, proxy),
-    neq: (val) => new LeafNode(field, "neq", val, proxy),
-    gt: (val) => new LeafNode(field, "gt", val, proxy),
-    gte: (val) => new LeafNode(field, "gte", val, proxy),
-    lt: (val) => new LeafNode(field, "lt", val, proxy),
-    lte: (val) => new LeafNode(field, "lte", val, proxy),
-    in: (val) => new LeafNode(field, "in", val, proxy),
-    nin: (val) => new LeafNode(field, "nin", val, proxy),
-  };
-}
-
-function createDateOperators<TFields>(field: string, proxy: TFields): DateFieldOperators<TFields> {
-  return {
-    eq: (val) => new LeafNode(field, "eq", val, proxy),
-    neq: (val) => new LeafNode(field, "neq", val, proxy),
-    gt: (val) => new LeafNode(field, "gt", val, proxy),
-    gte: (val) => new LeafNode(field, "gte", val, proxy),
-    lt: (val) => new LeafNode(field, "lt", val, proxy),
-    lte: (val) => new LeafNode(field, "lte", val, proxy),
-  };
-}
-
-function createBooleanOperators<TFields>(field: string, proxy: TFields): BooleanFieldOperators<TFields> {
-  return {
-    eq: (val) => new LeafNode(field, "eq", val, proxy),
-    neq: (val) => new LeafNode(field, "neq", val, proxy),
-    isTrue: () => new LeafNode(field, "eq", true, proxy),
-    isFalse: () => new LeafNode(field, "eq", false, proxy),
-  };
 }
 
 // ── Mock QueryBuilder 已在 beforeEach 中注册（配合 resetQueryBuilderRegistry 隔离测试） ──
@@ -418,7 +334,7 @@ describe("QueryBuilder", () => {
 
   it("T20: deep nesting (3+ levels AND/OR)", () => {
     const qb = createQueryBuilder<MockEntity>("MockEntity", createMockTransport());
-    qb.where(x => x.a.eq("1").and(x => x.b.eq("2")).and(x => x.c.eq("3")));
+    qb.where(x => x.userName.eq("1").and(x => x.status.eq("2")).and(x => x.createTime.eq("3")));
     expect(qb["_filters"].length).toBe(1);
     const filter = qb["_filters"][0] as any;
     expect(filter.and).toHaveLength(3);
@@ -472,5 +388,62 @@ describe("QueryBuilder", () => {
   it("T25: formatScalar throws on NaN/Infinity", () => {
     expect(() => QueryBuilderBase["formatScalar"](NaN)).toThrow();
     expect(() => QueryBuilderBase["formatScalar"](Infinity)).toThrow();
+  });
+
+  // ── v1.0.5 基类去重化（compileGraphQL/createOrderByProxy/操作符工厂下沉到 SDK） ──
+
+  it("T26: metadata-driven createFieldsProxy maps gqlTypes via createOperators", () => {
+    const qb = createQueryBuilder<MockEntity>("MockEntity", createMockTransport());
+    // userName → "String" → createStringOps
+    qb.where(x => x.userName.contains("a"));
+    expect(qb["_filters"][0]).toEqual({ userName: { contains: "a" } });
+    // isDeleted → "Boolean" → createBooleanOps
+    qb.where(x => x.isDeleted.isFalse());
+    expect(qb["_filters"][1]).toEqual({ isDeleted: { eq: false } });
+    // amount → "Decimal" → createNumberOps
+    qb.where(x => x.amount.gt(100));
+    expect(qb["_filters"][2]).toEqual({ amount: { gt: 100 } });
+    // createTime → "DateTime" → createDateOps
+    qb.where(x => x.createTime.lte("2024-01-01"));
+    expect(qb["_filters"][3]).toEqual({ createTime: { lte: "2024-01-01" } });
+  });
+
+  it("T27: compileGraphQL from base class matches entity resolver + default fields", () => {
+    const qb = createQueryBuilder<MockEntity>("MockEntity", createMockTransport());
+    const query = qb["compileGraphQL"]();
+    expect(query).toBe(
+      "query { mockEntity(first: 100) { totalCount nodes { id userName status amount createTime isDeleted } } }",
+    );
+  });
+
+  it("T28: createOrderByProxy from base returns SortNode with field", () => {
+    const qb = createQueryBuilder<MockEntity>("MockEntity", createMockTransport());
+    qb.orderBy(x => x.createTime.desc());
+    expect(qb["_sorts"]).toEqual([{ field: "createTime", desc: true }]);
+    // 基类代理返回的 SortNode 携带 dummyAsc/dummyDesc 方法
+    const node = (qb as any)["createOrderByProxy"]().createTime as SortNode;
+    expect(node.field).toBe("createTime");
+    expect(node.isDesc).toBe(false);
+    expect(node.desc().isDesc).toBe(true);
+    expect(node.asc().isDesc).toBe(false);
+  });
+
+  it("T29: imported SDK operator factories produce identical filters", () => {
+    const ops = createStringOps<MockEntityFields>("userName", {} as MockEntityFields);
+    expect(ops.eq("admin").toFilter()).toEqual({ userName: { eq: "admin" } });
+    const numOps = createNumberOps<MockEntityFields>("amount", {} as MockEntityFields);
+    expect(numOps.gt(100).toFilter()).toEqual({ amount: { gt: 100 } });
+    const dateOps = createDateOps<MockEntityFields>("createTime", {} as MockEntityFields);
+    expect(dateOps.lte("2024-01-01").toFilter()).toEqual({ createTime: { lte: "2024-01-01" } });
+    const boolOps = createBooleanOps<MockEntityFields>("isDeleted", {} as MockEntityFields);
+    expect(boolOps.isTrue().toFilter()).toEqual({ isDeleted: { eq: true } });
+    // createOperators 按 gqlType 路由到对应分族工厂
+    const routed = createOperators<MockEntityFields>(
+      "status", "String", {} as MockEntityFields,
+    ) as StringFieldOperators<MockEntityFields>;
+    expect(routed.eq("Active").toFilter()).toEqual({ status: { eq: "Active" } });
+    // dummyAsc/dummyDesc 为纯函数，返回新的 SortNode
+    expect(typeof dummyAsc).toBe("function");
+    expect(typeof dummyDesc).toBe("function");
   });
 });

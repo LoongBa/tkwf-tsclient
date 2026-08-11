@@ -81,3 +81,62 @@ export class PagedResponse<T> {
 
   get items(): T[] { return this.nodes ?? []; }
 }
+
+// ── 过滤输入类型（v1.0.5 分族泛型化） ──
+
+/** HC Connection 分页信息（schema PageInfo 类型）。 */
+export interface PageInfo {
+  hasNextPage: boolean;
+  hasPreviousPage: boolean;
+  startCursor: string | null;
+  endCursor: string | null;
+}
+
+/** 数值/日期族操作符过滤器（12 操作符；in/nin 沿用现有单值语义）。 */
+export interface OperationFilterInput<T> {
+  eq?: T | null; neq?: T | null; in?: T | null; nin?: T | null;
+  gt?: T | null; ngt?: T | null; gte?: T | null; ngte?: T | null;
+  lt?: T | null; nlt?: T | null; lte?: T | null; nlte?: T | null;
+}
+
+/** 字符串族操作符过滤器（and/or + contains/startsWith/endsWith 族，无数值比较）。 */
+export interface StringOperationFilterInput {
+  and?: StringOperationFilterInput | null;
+  or?: StringOperationFilterInput | null;
+  eq?: string | null; neq?: string | null;
+  contains?: string | null; ncontains?: string | null;
+  in?: string | null; nin?: string | null;
+  startsWith?: string | null; nstartsWith?: string | null;
+  endsWith?: string | null; nendsWith?: string | null;
+}
+
+/** 布尔族操作符过滤器（仅 eq/neq）。 */
+export interface BooleanOperationFilterInput {
+  eq?: boolean | null;
+  neq?: boolean | null;
+}
+
+/** 枚举族操作符过滤器（eq/neq/in/nin）。 */
+export interface EnumOperationFilterInput<T extends string> {
+  eq?: T | null; neq?: T | null; in?: T | null; nin?: T | null;
+}
+
+/** HC Connection 泛型（pageInfo/edges/nodes/totalCount）。 */
+export interface Connection<TNode, TEdge> {
+  pageInfo: PageInfo;
+  edges: Array<TEdge>;
+  nodes: Array<TNode>;
+  totalCount: number;
+}
+
+/** HC Edge 泛型（cursor/node）。 */
+export interface Edge<TNode> {
+  cursor: string;
+  node: TNode | null;
+}
+
+/** SelectFields 映射派生：Partial<Record<keyof TFields, true>>。 */
+export type SelectFieldsOf<TFields> = Partial<Record<keyof TFields, true>>;
+
+/** OrderByFields 映射派生：Record<keyof TFields, SortNode>。 */
+export type OrderByFieldsOf<TFields> = Record<keyof TFields, SortNode>;

@@ -3,7 +3,72 @@
 
 import type { Transport } from "./transport";
 import { PagedResponse } from "./query-builder-types";
-import type { PredicateNode, SortNode } from "./query-builder-types";
+import type { PredicateNode, SortNode, StringFieldOperators, NumberFieldOperators, DateFieldOperators, BooleanFieldOperators } from "./query-builder-types";
+
+// ── 操作符工厂（v1.0.5 从 codegen 产物迁移至 SDK） ──
+
+export function dummyAsc(this: SortNode): SortNode { return { field: this.field, isDesc: false, asc: this.asc, desc: this.desc }; }
+export function dummyDesc(this: SortNode): SortNode { return { field: this.field, isDesc: true, asc: this.asc, desc: this.desc }; }
+
+export function createOperators<TFields>(field: string, gqlType: string, proxy: TFields): any {
+  switch (gqlType) {
+    case "String": case "ID": case "Url": case "UUID":
+      return createStringOps(field, proxy);
+    case "Int": case "Float": case "Decimal": case "Long": case "Byte": case "Short":
+      return createNumberOps(field, proxy);
+    case "DateTime": case "LocalDate":
+      return createDateOps(field, proxy);
+    case "Boolean":
+      return createBooleanOps(field, proxy);
+    default:
+      return createStringOps(field, proxy);
+  }
+}
+
+export function createStringOps<TFields>(field: string, proxy: TFields): StringFieldOperators<TFields> {
+  return {
+    eq: (v: string) => new LeafNode<TFields>(field, "eq", v, proxy),
+    neq: (v: string) => new LeafNode<TFields>(field, "neq", v, proxy),
+    contains: (v: string) => new LeafNode<TFields>(field, "contains", v, proxy),
+    startsWith: (v: string) => new LeafNode<TFields>(field, "startsWith", v, proxy),
+    endsWith: (v: string) => new LeafNode<TFields>(field, "endsWith", v, proxy),
+    in: (v: string[]) => new LeafNode<TFields>(field, "in", v, proxy),
+    nin: (v: string[]) => new LeafNode<TFields>(field, "nin", v, proxy),
+  };
+}
+
+export function createNumberOps<TFields>(field: string, proxy: TFields): NumberFieldOperators<TFields> {
+  return {
+    eq: (v: number) => new LeafNode<TFields>(field, "eq", v, proxy),
+    neq: (v: number) => new LeafNode<TFields>(field, "neq", v, proxy),
+    gt: (v: number) => new LeafNode<TFields>(field, "gt", v, proxy),
+    gte: (v: number) => new LeafNode<TFields>(field, "gte", v, proxy),
+    lt: (v: number) => new LeafNode<TFields>(field, "lt", v, proxy),
+    lte: (v: number) => new LeafNode<TFields>(field, "lte", v, proxy),
+    in: (v: number[]) => new LeafNode<TFields>(field, "in", v, proxy),
+    nin: (v: number[]) => new LeafNode<TFields>(field, "nin", v, proxy),
+  };
+}
+
+export function createDateOps<TFields>(field: string, proxy: TFields): DateFieldOperators<TFields> {
+  return {
+    eq: (v: string) => new LeafNode<TFields>(field, "eq", v, proxy),
+    neq: (v: string) => new LeafNode<TFields>(field, "neq", v, proxy),
+    gt: (v: string) => new LeafNode<TFields>(field, "gt", v, proxy),
+    gte: (v: string) => new LeafNode<TFields>(field, "gte", v, proxy),
+    lt: (v: string) => new LeafNode<TFields>(field, "lt", v, proxy),
+    lte: (v: string) => new LeafNode<TFields>(field, "lte", v, proxy),
+  };
+}
+
+export function createBooleanOps<TFields>(field: string, proxy: TFields): BooleanFieldOperators<TFields> {
+  return {
+    eq: (v: boolean) => new LeafNode<TFields>(field, "eq", v, proxy),
+    neq: (v: boolean) => new LeafNode<TFields>(field, "neq", v, proxy),
+    isTrue: () => new LeafNode<TFields>(field, "eq", true, proxy),
+    isFalse: () => new LeafNode<TFields>(field, "eq", false, proxy),
+  };
+}
 
 // ── 工具函数 ──
 
@@ -327,11 +392,46 @@ export abstract class QueryBuilderBase<
     return String(value);
   }
 
+  // ── GraphQL 编译器（基类默认实现，子类可选择性覆写） ──
+
+  protected compileGraphQL(): string {
+    const fields = this._fields.length > 0
+      ? this._fields.join(" ")
+      : this.defaultFields().join(" ");
+    const whereClause = this.buildWhereClause();
+    const orderClause = this.buildOrderClause();
+    const afterClause = this._afterCursor ? `, after: "${this._afterCursor}"` : "";
+    const pageInfo = this._cursorCache.size > 0 || this._afterCursor
+      ? " pageInfo { endCursor hasNextPage }" : "";
+    return `query { ${this.resolverField}(first: ${this._pageSize}${afterClause}${whereClause}${orderClause}) { totalCount nodes { ${fields} }${pageInfo} } }`;
+  }
+
+  protected createOrderByProxy(): TOrderByFields {
+    return new Proxy({} as TOrderByFields, {
+      get: (_t: any, prop: string | symbol) => {
+        const field = typeof prop === "string" ? prop : "";
+        const self: SortNode = { field, isDesc: false, asc: dummyAsc, desc: dummyDesc };
+        return self;
+      },
+    });
+  }
+
+  /** v1.0.5: 元数据驱动的字段代理外壳（字段名 → gqlType 映射表）。 */
+  protected createFieldsProxyFrom<T>(meta: Record<string, string>): T {
+    const proxy = new Proxy({} as T, {
+      get: (_t: any, prop: string | symbol) => {
+        const fieldName = typeof prop === "string" ? prop : "";
+        const gqlType = meta[fieldName];
+        if (!gqlType) throw new Error(`Unknown field '${fieldName}'`);
+        return createOperators(fieldName, gqlType, proxy);
+      },
+    });
+    return proxy;
+  }
+
   // ── 抽象成员（codegen 子类实现） ──
 
-  protected abstract compileGraphQL(): string;
   protected abstract createFieldsProxy(): TFields;
-  protected abstract createOrderByProxy(): TOrderByFields;
   /** 未调用 select 时的默认字段列表（由子类实现，供 compileGraphQL 内部使用）。 */
   protected abstract defaultFields(): string[];
 }
