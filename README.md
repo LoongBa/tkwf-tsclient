@@ -18,12 +18,147 @@ TypeScript Domain 客户端 SDK，为 [TKWF](https://github.com/LoongBa/TKW.Fram
 
 ## 快速开始
 
+### 1. 全局配置（应用入口）
+
+把 `Tkwf.configure()` 放在应用入口文件（如 `main.tsx`、`app.ts`、`layout.tsx`），**只配置一次**：
+
+```typescript
+import { Tkwf } from "@tkwf/tsclient";
+
+// 应用入口（如 main.tsx）
+Tkwf.configure("default", {
+  endpoint: "/graphql",
+  storage: localStorage,          // ← 会话持久化方式（见下文 §1.2）
+  onUnauthorized: () => { window.location.href = "/login"; },
+  onGlobalError: (err) => { showToast(err.message); },
+  onSign: (ctx) => ({ "X-Signature": computeSignature(ctx.body, ctx.timestamp) }),
+  onPong: { intervalMinutes: 5, handler: (status) => {
+    if (!status.isAuthenticated) redirectToLogin();
+  }},
+});
+
+// 多场景支持（如不同商户隔离）
+Tkwf.configure("merchant-a", {
+  endpoint: "/merchant-a/graphql",
+  storage: sessionStorage,
+  onUnauthorized: () => { window.location.href = "/merchant/login"; },
+});
+```
+
+#### 1.1 会话生命周期
+
+```
+login() → 服务端返回 sessionKey → 自动持久化到 storage → 页面刷新
+  → GetUser() 从 storage 恢复 sessionKey → 正常调用 API
+  → logout() → 清除 storage 中的 sessionKey
+```
+
+#### 1.2 会话持久化方式（storage）
+
+| 选项 | 说明 | 适用场景 |
+|------|------|---------|
+| `sessionStorage`（默认） | 关闭 tab 后 session 自动清除 | 安全要求较高的场景 |
+| `localStorage` | 关闭浏览器后 session 仍保留 | 需要保持登录状态 |
+| **自定义 Storage** | 实现 `{ getItem, setItem, removeItem }` | 从 cookie 读取、加密存储等 |
+
+**自定义 Storage 示例**（从 cookie 读写 sessionKey）：
+
+```typescript
+import { Tkwf } from "@tkwf/tsclient";
+
+function getCookie(name: string): string | null {
+  const match = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+function setCookie(name: string, value: string) {
+  document.cookie = `${name}=${encodeURIComponent(value)}; path=/; max-age=86400`;
+}
+
+function removeCookie(name: string) {
+  document.cookie = `${name}=; path=/; max-age=0`;
+}
+
+const cookieStorage: Storage = {
+  getItem: (key) => getCookie(key),
+  setItem: (key, value) => setCookie(key, value),
+  removeItem: (key) => removeCookie(key),
+  get length() { return document.cookie.split(";").length; },
+  key: (index) => document.cookie.split(";")[index]?.split("=")[0]?.trim() ?? null,
+  clear: () => { /* 按需实现 */ },
+};
+
+Tkwf.configure("default", {
+  endpoint: "/graphql",
+  storage: cookieStorage,  // ← 使用 cookie 持久化 sessionKey
+  // ...
+});
+```
+
+### 2. 页面中使用
+
+配置完成后，**任何页面或组件**中直接使用 `Tkwf.User` 或 `Tkwf.Guest`：
+
+```typescript
+// 认证用户 —— 预先验证身份，无本地 session 时触发 onUnauthorized
+const profile = await Tkwf.User.Use<UserInfoService>().getMyProfile();
+
+// 游客 —— 不预先验证，直接调用，是否允许由服务端裁决
+const products = await Tkwf.Guest.Use<IPublicApi>().getProducts();
+
+// 多场景切换
+const user = Tkwf.GetUser("merchant-a");
+const data = await user.Use<IMerchantApi>().getList({ page: 1 });
+
+// 链式回调（onSuccess / onError）
+Tkwf.User.Use<UserInfoService>()
+  .getMyProfile()
+  .onSuccess((data) => setProfile(data))
+  .onError((err) => toast(err.message));
+
+// 查询构建器
+const orders = await Tkwf.User.Query<OrderEntity>("Order")
+  .where(o => o.status.eq("Paid"))
+  .toArray();
+```
+
+### 3. 完整登录流程
+
+```typescript
+import { Tkwf } from "@tkwf/tsclient";
+
+// 登录页
+async function handleLogin(userName: string, password: string) {
+  const guest = Tkwf.Guest;                          // 游客身份
+  const payload = await guest.loginAs(userName, password);
+  // 成功后，sessionKey 自动持久化到 storage（由 SDK 内部完成）
+  // 后续页面刷新后，Tkwf.User.Use<>() 会自动恢复会话
+}
+
+// 其他页面
+async function loadProfile() {
+  // Tkwf.User 内部自动从 storage 恢复 sessionKey
+  // 无 sessionKey 时触发 onUnauthorized（跳转登录页）
+  const profile = await Tkwf.User.Use<UserInfoService>().getMyProfile();
+}
+
+// 注销
+async function handleLogout() {
+  const user = Tkwf.User;
+  await user.Use<IApi>().logout({ broadcast: true });
+  // sessionKey 已清除，再次访问 Tkwf.User 会触发 onUnauthorized
+}
+```
+
+---
+
+## 进阶用法
+
 ### GraphQL 模式（默认）
 
 ```typescript
 import { DomainHostClient } from "@tkwf/tsclient";
 
-// 匿名访问
 const host = DomainHostClient.init("my-app", {
   endpoint: "/graphql",
 });
@@ -87,84 +222,23 @@ const host = DomainHostClient.init("my-app", {
 
 ---
 
-## Tkwf 门面工厂（V1.0.4）
-
-在 `DomainHostClient` 之上提供集中配置 + 一行调用的静态入口。
-每个项目只需在入口配置一次，页面中直接使用 `Tkwf.User` 或 `Tkwf.Guest`。
-
-### 集中配置
-
-```typescript
-import { Tkwf } from "@tkwf/tsclient";
-
-// 应用入口 —— 配置一次
-Tkwf.configure("default", {
-  endpoint: "/graphql",
-  storage: localStorage,
-  // V1.0.4: 统一在配置对象中设置钩子
-  onUnauthorized: () => { window.location.href = "/login"; },
-  onGlobalError: (err) => { showToast(err.message); },
-  onSign: (ctx) => ({ "X-Signature": computeSignature(ctx.body, ctx.timestamp) }),
-  onPong: { intervalMinutes: 5, handler: (status) => { if (!status.isAuthenticated) redirectToLogin(); } },
-});
-
-// 多场景支持（如不同商户隔离）
-Tkwf.configure("merchant-a", {
-  endpoint: "/merchant-a/graphql",
-  storage: localStorage,
-  onUnauthorized: () => { window.location.href = "/merchant/login"; },
-});
-```
-
-### 页面使用
-
-```typescript
-// 认证用户 —— 显式声明"预先验证身份"
-// 内部走 GetUser()，无本地 session 时触发 onUnauthorized 并抛 AUTH_REQUIRED
-const profile = await Tkwf.User.Use<UserInfoService>().getMyProfile();
-
-// 游客 —— 显式声明"不预先验证"
-// 内部走 GetGuest()，直接调用，是否允许由服务端裁决
-const products = await Tkwf.Guest.Use<IPublicApi>().getProducts();
-
-// 多场景切换
-const user = Tkwf.GetUser("merchant-a");
-const data = await user.Use<IMerchantApi>().getList({ page: 1 });
-
-// 链式回调（onSuccess / onError）
-Tkwf.User.Use<UserInfoService>()
-  .getMyProfile()
-  .onSuccess((data) => setProfile(data))
-  .onError((err) => toast(err.message));
-
-// 查询构建器
-const orders = await Tkwf.User.Query<OrderEntity>("Order")
-  .where(o => o.status.eq("Paid"))
-  .toArray();
-```
-
----
-
 ## 使用方法
 
 ### 登录与认证
 
 ```typescript
-const host = DomainHostClient.init("my-app", {
-  endpoint: "/graphql",
-  storage: localStorage, // sessionStorage（默认）或 localStorage
-});
-
-const user = host.GetGuest();
+// 使用 Tkwf.Guest 登录（已全局配置，无需重复 init）
+const guest = Tkwf.Guest;
 
 // 密码登录
-const payload = await user.loginAs("admin", "password123");
+const payload = await guest.loginAs("admin", "password123");
+// 成功后 sessionKey 自动持久化到 storage
 
 // 短信验证码登录
-const smsPayload = await user.loginBySms("13800138000", "123456");
+const smsPayload = await guest.loginBySms("13800138000", "123456");
 
 // 统一上下文登录（支持多种认证方式）
-const ctxPayload = await user.loginByContext("admin", "credential", {
+const ctxPayload = await guest.loginByContext("admin", "credential", {
   authType: "Password",    // Password | Sms | QrCode | Token
   loginFrom: "PcWeb",
   deviceId: "device-xxx",
@@ -198,63 +272,75 @@ const newUser = await api.createUser({ name: "Alice", email: "alice@test.com" })
 ### 从存储恢复会话（`GetUser`）
 
 ```typescript
-const host = DomainHostClient.init("my-app", {
-  endpoint: "/graphql",
-  storage: localStorage,
-});
-
+// Tkwf.User 内部自动从 storage 恢复 sessionKey
+// 无 sessionKey 时触发 onUnauthorized 并抛 AUTH_REQUIRED
 try {
-  const user = host.GetUser(); // 从 storage 恢复 sessionKey
-  const api = user.Use<IApi>();
+  const api = Tkwf.User.Use<IApi>();
   const data = await api.getUser({ id: 1 });
 } catch (err) {
-  if (err.code === "AUTH_REQUIRED") {
-    // 未登录，引导到登录页
+  if (err instanceof DomainClientError && err.code === "AUTH_REQUIRED") {
+    // 未登录，引导到登录页（onUnauthorized 已触发）
   }
 }
 ```
 
 ### 请求签名
 
+在 `Tkwf.configure()` 中通过 `onSign` 配置：
+
 ```typescript
-const host = DomainHostClient.init("my-app")
-  .onSign(({ url, method, headers, body, timestamp }) => {
+Tkwf.configure("default", {
+  endpoint: "/graphql",
+  onSign: ({ url, method, headers, body, timestamp }) => {
     const signature = computeSignature(body, timestamp);
     return { "X-Signature": signature, "X-Timestamp": timestamp };
-  });
+  },
+});
 ```
 
 ### 全局错误处理
 
+在 `Tkwf.configure()` 中通过 `onGlobalError` 配置：
+
 ```typescript
-const host = DomainHostClient.init("my-app")
-  .onGlobalError((error) => {
+Tkwf.configure("default", {
+  endpoint: "/graphql",
+  onGlobalError: (error) => {
     console.error(`[${error.code}] ${error.message}`);
-  });
+  },
+});
 ```
 
 ### 心跳检测
 
+在 `Tkwf.configure()` 中通过 `onPong` 配置：
+
 ```typescript
-const host = DomainHostClient.init("my-app")
-  .onPong(5, (status) => {
+Tkwf.configure("default", {
+  endpoint: "/graphql",
+  onPong: { intervalMinutes: 5, handler: (status) => {
     // 每 5 分钟 ping 一次（仅用户活跃时）
     if (!status.isAuthenticated) {
       // 会话已过期，跳转登录
     }
-  });
+  }},
+});
 ```
 
 ### 请求/响应拦截器
 
+在 `Tkwf.configure()` 中配置：
+
 ```typescript
-const host = DomainHostClient.init("my-app")
-  .onRequest((req) => {
+Tkwf.configure("default", {
+  endpoint: "/graphql",
+  onRequest: (req) => {
     console.log(`→ ${req.type} ${req.field}`);
-  })
-  .onResponse((res, req) => {
+  },
+  onResponse: (res, req) => {
     console.log(`← ${req.field} (${res.durationMs}ms)`);
-  });
+  },
+});
 ```
 
 ### 资源释放
@@ -262,7 +348,7 @@ const host = DomainHostClient.init("my-app")
 ```typescript
 // React 中
 useEffect(() => {
-  return () => host.dispose();
+  return () => Tkwf.reset(); // 或直接不处理（建议在应用卸载时处理）
 }, []);
 ```
 
@@ -463,12 +549,6 @@ QueryString.composite({ page: 1, status: "active" });
 // 推送到 URL（不刷新页面）
 QueryString.push({ page: 3, status: "active" });
 ```
-
-## SSR 支持
-
-- `DomainClientUser` 自动检测 `sessionStorage` 可用性，不可用时使用内存存储
-- `DomainHostClient` 的心跳监测在 SSR 环境自动跳过
-- `QueryString.parse` 在无 `window` 环境可传入 `searchString` 参数
 
 ## 重试策略
 
