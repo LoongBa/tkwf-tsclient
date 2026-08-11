@@ -291,7 +291,8 @@ export class DomainClientUser {
     const cryptoImpl = options?.crypto ?? AuthCrypto;
     const iters = options?.iterations ?? 600000;
     const salt = cryptoImpl.randomSalt();
-    const clientHash = await cryptoImpl.pbkdf2(password, salt, iters);
+    const clientHashBytes = await cryptoImpl.pbkdf2(password, salt, iters);
+    const clientHash = cryptoImpl.bytesToHex(clientHashBytes);
 
     const result = await this.transport.execute<{
       registerSecure: RegisterResult;
@@ -302,7 +303,7 @@ export class DomainClientUser {
       variables: {
         input: {
           userName,
-          clientHash: clientHash,
+          clientHash,
           salt,
         },
       },
