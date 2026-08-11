@@ -193,15 +193,4 @@ describe("ServiceProxy", () => {
       expect(transport.execute).toHaveBeenCalledTimes(1);
     });
   });
-
-  describe("createCall return type", () => {
-    it("returns ChainableBuilder from createCall", () => {
-      const transport = createMockTransport();
-      const proxy = new ServiceProxy({ transport });
-      const call = proxy.createCall();
-
-      expect(call.getUser).toBeDefined();
-      expect(typeof call.getUser).toBe("function");
-    });
-  });
 });

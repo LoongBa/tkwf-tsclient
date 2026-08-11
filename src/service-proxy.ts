@@ -1,5 +1,5 @@
 import type { Transport } from "./transport";
-import { ChainablePromise, ChainableBuilder } from "./chainable";
+import { ChainablePromise } from "./chainable";
 import { DomainClientError } from "./domain-client-error";
 
 const MUTATION_PREFIXES = [
@@ -96,44 +96,4 @@ export class ServiceProxy {
     );
   }
 
-  createCall(): Record<string, (...args: unknown[]) => ChainableBuilder<unknown>> {
-    return new Proxy(
-      {} as Record<string, (...args: unknown[]) => ChainableBuilder<unknown>>,
-      {
-        get: (_target, prop: string | symbol) => {
-          if (typeof prop !== "string") return undefined;
-          return (...args: unknown[]) => {
-            const field = toGraphQLField(prop);
-            const type = isMutation(prop, this.explicitMutations) ? "mutation" as const : "query" as const;
-            const variables = args[0] as Record<string, unknown> | undefined;
-            // args[1] is an optional options bag with { signal?, selection? }
-            const options = args.length > 1 && typeof args[1] === "object" && args[1] !== null
-              ? (args[1] as { signal?: AbortSignal; selection?: string })
-              : undefined;
-            const sel = options?.selection ?? this.selectionMap?.[field];
-
-            return new ChainableBuilder((resolve, reject) => {
-              this.transport
-                .execute({
-                  field,
-                  type,
-                  variables,
-                  selection: sel,
-                  sessionKey: this.sessionKey ?? undefined,
-                  signal: options?.signal,
-                })
-                .then(resolve)
-                .catch((error: unknown) => {
-                  // V4.8.7: 先触发用户级错误处理
-                  if (this.userErrorHandler && error instanceof DomainClientError) {
-                    this.userErrorHandler(error);
-                  }
-                  reject(error);
-                });
-            });
-          };
-        },
-      },
-    );
   }
-}

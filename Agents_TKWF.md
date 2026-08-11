@@ -19,9 +19,18 @@ TypeScript Domain 客户端 SDK，为 TKWF 框架提供 GraphQL/REST 双协议�
 
 ## 3. 迭代开发流程
 
-1. 开发 → 测试（`npm test`）→ 构建（`npm run build`）→ 提交
-2. **推送（push）但不打 tag** → **tag 和发布必须征求同意**（见 §4）
-3. 发布流程：用户确认后 → `git tag v{version}` → `git push origin v{version}` → GitHub Actions 自动发布到 npm
+1. 新功能开发前 → 编写 `docs/迭代开发过程/V{主版本}/v{version}-{feat}-开发方案.md`
+2. 方案经审核通过后 → 按方案执行开发
+3. 开发完成 → 审查代码 → 编写 `docs/迭代开发过程/V{主版本}/v{version}-{feat}-审核报告.md`
+4. 测试（`npm test`）→ 构建（`npm run build`）→ 提交
+5. **推送（push）但不打 tag** → **tag 和发布必须征求同意**（见 §4）
+6. 发布流程：用户确认后 → `git tag v{version}` → `git push origin v{version}` → GitHub Actions 自动发布到 npm
+
+### 代码审查
+
+- **默认**：由 Sisyphus 审查代码
+- **复杂设计/实现**：由 Sisyphus 判断，建议用户使用 Oracle 审核
+- **注意**：Momus 仅审核开发方案（`.sisyphus/plans/*.md`），**拒绝审查代码**
 
 ### 提交纪律
 
@@ -51,4 +60,8 @@ TypeScript Domain 客户端 SDK，为 TKWF 框架提供 GraphQL/REST 双协议�
 ## 7. 文档
 
 - 仓库文档（README.md）随功能变更同步更新
-- 不主动创建额外文档文件（除非被明确要求）
+- 迭代文档：
+  - 开发方案：`v{version}-{feat}-开发方案.md`，存放于 `docs/迭代开发过程/V{主版本}/`
+  - 审核报告：`v{version}-{feat}-审核报告.md`，存放于同一目录
+- 开发方案必须在开发前编写并审核，审核报告在开发完成后审查代码时编写
+- 不主动创建其他额外文档文件（除非被明确要求）

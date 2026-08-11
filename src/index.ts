@@ -12,7 +12,7 @@ export type {
   ResponseContext,
 } from "./transport";
 
-export { ChainablePromise, ChainableBuilder } from "./chainable";
+export { ChainablePromise } from "./chainable";
 export type { CallbackOptions } from "./chainable";
 
 export { QueryString } from "./query-string";
@@ -29,6 +29,10 @@ export type { DomainClientUserOptions, LoginPayload, PingResult, ChallengeRespon
 
 export { DomainHostClient } from "./domain-host-client";
 export type { DomainHostClientOptions, PongHandler } from "./domain-host-client";
+
+// V1.0.4 — Tkwf 门面工厂
+export { Tkwf } from "./tkwf";
+export type { TkwfConfig } from "./tkwf";
 
 // V4.5
 export { AuthCrypto, pbkdf2, hmac, randomSalt, bytesToHex, hexToBytes, base64ToBytes } from "./crypto";

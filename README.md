@@ -87,6 +87,64 @@ const host = DomainHostClient.init("my-app", {
 
 ---
 
+## Tkwf 门面工厂（V1.0.4）
+
+在 `DomainHostClient` 之上提供集中配置 + 一行调用的静态入口。
+每个项目只需在入口配置一次，页面中直接使用 `Tkwf.User` 或 `Tkwf.Guest`。
+
+### 集中配置
+
+```typescript
+import { Tkwf } from "@tkwf/tsclient";
+
+// 应用入口 —— 配置一次
+Tkwf.configure("default", {
+  endpoint: "/graphql",
+  storage: localStorage,
+  // V1.0.4: 统一在配置对象中设置钩子
+  onUnauthorized: () => { window.location.href = "/login"; },
+  onGlobalError: (err) => { showToast(err.message); },
+  onSign: (ctx) => ({ "X-Signature": computeSignature(ctx.body, ctx.timestamp) }),
+  onPong: { intervalMinutes: 5, handler: (status) => { if (!status.isAuthenticated) redirectToLogin(); } },
+});
+
+// 多场景支持（如不同商户隔离）
+Tkwf.configure("merchant-a", {
+  endpoint: "/merchant-a/graphql",
+  storage: localStorage,
+  onUnauthorized: () => { window.location.href = "/merchant/login"; },
+});
+```
+
+### 页面使用
+
+```typescript
+// 认证用户 —— 显式声明"预先验证身份"
+// 内部走 GetUser()，无本地 session 时触发 onUnauthorized 并抛 AUTH_REQUIRED
+const profile = await Tkwf.User.Use<UserInfoService>().getMyProfile();
+
+// 游客 —— 显式声明"不预先验证"
+// 内部走 GetGuest()，直接调用，是否允许由服务端裁决
+const products = await Tkwf.Guest.Use<IPublicApi>().getProducts();
+
+// 多场景切换
+const user = Tkwf.GetUser("merchant-a");
+const data = await user.Use<IMerchantApi>().getList({ page: 1 });
+
+// 链式回调（onSuccess / onError）
+Tkwf.User.Use<UserInfoService>()
+  .getMyProfile()
+  .onSuccess((data) => setProfile(data))
+  .onError((err) => toast(err.message));
+
+// 查询构建器
+const orders = await Tkwf.User.Query<OrderEntity>("Order")
+  .where(o => o.status.eq("Paid"))
+  .toArray();
+```
+
+---
+
 ## 使用方法
 
 ### 登录与认证
@@ -136,15 +194,6 @@ const newUser = await api.createUser({ name: "Alice", email: "alice@test.com" })
 | `create*`, `update*`, `delete*`, `add*`, `remove*` | mutation |
 | `lock*`, `unlock*`, `reset*` | mutation |
 | 其他 | query |
-
-### 使用 `Call()` 链式调用
-
-```typescript
-const api = user.Call("merchant");
-api.getUser({ id: 1 })
-  .onSuccess((data) => console.log("用户:", data))
-  .onError((err) => console.error("失败:", err.message));
-```
 
 ### 从存储恢复会话（`GetUser`）
 
@@ -239,7 +288,7 @@ const result = await transport.uploadFile<{ url: string }>(
 );
 
 // 或通过 DomainHostClient 获取 transport 实例
-// 注意：uploadFile 需要直接操作 transport 对象，不经过 Use()/Call()
+// 注意：uploadFile 需要直接操作 transport 对象，不经过 Use() 调用
 ```
 
 > `uploadFile()` 走独立的 `multipart/form-data` POST 路径，不经过 `executeHttp()` 通用流程，因此不会触发重试逻辑。
@@ -259,12 +308,12 @@ const result = await transport.uploadFile<{ url: string }>(
 ┌──────────────────────▼───────────────────────────┐
 │                  DomainClientUser                  │  ← 用户会话管理
 │   loginAs() / loginBySms() / loginByContext()     │
-│   Use() / Call() / query() / mutate() / ping()    │
+│   Use() / query() / mutate() / ping()             │
 └──────────────────────┬───────────────────────────┘
                        │
 ┌──────────────────────▼───────────────────────────┐
 │                    ServiceProxy                    │  ← 动态代理
-│   createUse() / createCall()                      │
+│   createUse()                                     │
 │   方法名 → query/mutation 自动映射                │
 └──────────────────────┬───────────────────────────┘
                        │
@@ -342,7 +391,6 @@ interface Transport {
 ### 动态代理（ServiceProxy）
 
 - `Use()` — thenable Proxy，支持 `await` / `.onSuccess()` / `.onError()`
-- `Call()` — 回调 Proxy（非 thenable），`.onSuccess()` / `.onError()`
 - 方法名前缀启发式判断 query/mutation
 - `selectionMap` — 自动附加子字段选择（GraphQL 模式）
 - `explicitMutations` — 覆盖前缀启发式判断
@@ -368,7 +416,7 @@ interface Transport {
 
 ## 核心模块
 
-### ChainablePromise / ChainableBuilder
+### ChainablePromise
 
 **ChainablePromise**（Use）：
 - `then` / `catch` 可用（thenable）
@@ -376,11 +424,6 @@ interface Transport {
 - `.onSuccess(fn)` — 成功回调
 - `.onError(fn)` — 错误回调（错误继续传播）
 - 支持全局错误处理器
-
-**ChainableBuilder**（Call）：
-- 非 thenable（无 `then`）
-- `.onSuccess(fn)` — 成功回调
-- `.onError(fn)` — 错误回调（错误被吞掉，不传播）
 
 ### Pager — 分页 URL 构建器
 
@@ -453,7 +496,7 @@ const host = DomainHostClient.init("my-app", {
 ## 开发
 
 ```bash
-npm test       # 运行测试（127 tests across 7 test files）
+npm test       # 运行测试（167 tests across 9 test files）
 npm run test   # vitest
 ```
 
@@ -474,7 +517,7 @@ DMP-Lite.Merchant.AdminWeb/src/templates/ts-domain-client-examples.ts
 | 初始化 | GraphQL / REST / 自定义重试 | ✅ 测试通过 |
 | 认证 | 密码登录 / 短信登录 / Context 登录 / 安全登录 / 安全注册 / 登出 | ✅/⏳/❌ |
 | 会话 | 恢复会话 / 心跳 / 手动 Ping | ✅ |
-| 业务 API | Use<T>() / Call() / 通用 query/mutate | ✅ |
+| 业务 API | Use<T>() / 通用 query/mutate | ✅ |
 | 错误处理 | 按错误码分发 / 全局处理器 | ✅ |
 | 拦截器 | 请求/响应日志 / 请求签名 | ✅ |
 | Crypto | PBKDF2 / HMAC / 编码转换 | ✅ |

@@ -1,7 +1,7 @@
 import { type Transport } from "./transport";
 import { DomainClientError } from "./domain-client-error";
 import { ServiceProxy } from "./service-proxy";
-import type { ChainablePromise, ChainableBuilder } from "./chainable";
+import type { ChainablePromise } from "./chainable";
 import { AuthCrypto, type AuthCryptoApi } from "./crypto";
 import { QueryBuilderBase, createQueryBuilder } from "./query-builder";
 
@@ -460,18 +460,6 @@ export class DomainClientUser {
     return proxy.createUse() as unknown as TService;
   }
 
-  /** Create a Call() proxy for callback-chain-style API calls. */
-  Call(_serviceName: string): Record<string, (...args: unknown[]) => ChainableBuilder<unknown>> {
-    const proxy = new ServiceProxy({
-      transport: this.transport,
-      sessionKey: this.sessionKey,
-      userErrorHandler: (err) => this.handleError(err),
-      explicitMutations: EXPLICIT_MUTATIONS,
-      selectionMap: this.selectionMap,
-    });
-    return proxy.createCall();
-  }
-
   /**
    * Create a Query-builder proxy for type-safe IQueryable chain queries.
    */
@@ -490,9 +478,6 @@ const EXPLICIT_MUTATIONS: ReadonlySet<string> = new Set([
   "loginBySms",
   "loginByQrCode",
   "logout",
-  // V4.5
-  "requestChallenge",
-  "registerSecure",
 ]);
 
 /** In-memory storage fallback for SSR */

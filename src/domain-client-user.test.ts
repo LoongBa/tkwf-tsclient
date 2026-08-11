@@ -134,6 +134,52 @@ describe("DomainClientUser", () => {
     });
   });
 
+  describe("loginByContext()", () => {
+    it("uses default enum values PC_WEB / PASSWORD when context omitted", async () => {
+      vi.mocked(transport.execute).mockResolvedValue({
+        loginByContext: { success: true, sessionKey: "sk_ctx" },
+      });
+      const user = new DomainClientUser({ transport, storage, storageKey: "test" });
+
+      await user.loginByContext("admin", "x").catch(() => {});
+
+      expect(transport.execute).toHaveBeenCalledWith(
+        expect.objectContaining({
+          field: "loginByContext",
+          variables: expect.objectContaining({
+            input: expect.objectContaining({
+              loginFrom: "PC_WEB",
+              authType: "PASSWORD",
+            }),
+          }),
+        }),
+      );
+    });
+
+    it("passes explicit loginFrom/authType when provided", async () => {
+      vi.mocked(transport.execute).mockResolvedValue({
+        loginByContext: { success: true, sessionKey: "sk_ctx" },
+      });
+      const user = new DomainClientUser({ transport, storage, storageKey: "test" });
+
+      await user.loginByContext("admin", "x", {
+        loginFrom: "APP",
+        authType: "SMS_CODE",
+      }).catch(() => {});
+
+      expect(transport.execute).toHaveBeenCalledWith(
+        expect.objectContaining({
+          variables: expect.objectContaining({
+            input: expect.objectContaining({
+              loginFrom: "APP",
+              authType: "SMS_CODE",
+            }),
+          }),
+        }),
+      );
+    });
+  });
+
   describe("ping()", () => {
     it("sends mutation type (fix: was query)", async () => {
       vi.mocked(transport.execute).mockResolvedValue({

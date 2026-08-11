@@ -70,38 +70,3 @@ export class ChainablePromise<T> {
     return this;
   }
 }
-
-/**
- * ChainableBuilder — NOT thenable, callback-only. For use with Call().
- */
-export class ChainableBuilder<T> {
-  private promise: Promise<T>;
-
-  constructor(
-    executor: (
-      resolve: (value: T | PromiseLike<T>) => void,
-      reject: (reason?: unknown) => void,
-    ) => void,
-  ) {
-    this.promise = new Promise<T>(executor);
-  }
-
-  onSuccess(fn: (data: T) => void, _opts?: CallbackOptions): this {
-    this.promise = this.promise.then((d) => {
-      fn(d);
-      return d;
-    });
-    return this;
-  }
-
-  onError(fn: (err: DomainClientError) => void, _opts?: CallbackOptions): this {
-    this.promise = this.promise.catch((err) => {
-      const domainErr =
-        err instanceof DomainClientError
-          ? err
-          : new DomainClientError(String(err), "UNKNOWN", err);
-      fn(domainErr);
-    }) as Promise<T>;
-    return this;
-  }
-}

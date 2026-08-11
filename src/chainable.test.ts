@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { ChainablePromise, ChainableBuilder } from "./chainable";
+import { ChainablePromise } from "./chainable";
 import { DomainClientError } from "./domain-client-error";
 
 // ---------------------------------------------------------------------------
@@ -118,38 +118,5 @@ describe("ChainablePromise", () => {
     await expect(p).rejects.toBe(err);
     expect(successSpy).not.toHaveBeenCalled();
     expect(errorSpy).toHaveBeenCalledWith(err);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// ChainableBuilder
-// ---------------------------------------------------------------------------
-describe("ChainableBuilder", () => {
-  it("onSuccess fires callback with resolved data", async () => {
-    const spy = vi.fn();
-    const builder = new ChainableBuilder<number>((resolve) => resolve(5));
-    builder.onSuccess(spy);
-    await new Promise(process.nextTick);
-    expect(spy).toHaveBeenCalledWith(5);
-  });
-
-  it("onError fires callback with wrapped DomainClientError and does NOT re-throw", async () => {
-    const spy = vi.fn();
-    const raw = new Error("builder error");
-    const builder = new ChainableBuilder<never>((_, reject) => reject(raw));
-    builder.onError(spy);
-
-    // ChainableBuilder swallows errors (does not re-throw)
-    // so waiting for the internal promise should not reject
-    await new Promise(process.nextTick);
-    expect(spy).toHaveBeenCalledOnce();
-    const passed = spy.mock.calls[0][0] as DomainClientError;
-    expect(passed.message).toBe("Error: builder error");
-    expect(passed.code).toBe("UNKNOWN");
-  });
-
-  it("is not thenable (no then property)", () => {
-    const builder = new ChainableBuilder<number>((resolve) => resolve(1));
-    expect((builder as { then?: unknown }).then).toBeUndefined();
   });
 });
