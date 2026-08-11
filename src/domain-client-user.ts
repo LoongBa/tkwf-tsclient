@@ -42,7 +42,7 @@ export interface DomainClientUserOptions {
   storageKey: string;
   /**
    * Map of GraphQL field names to subfield selection strings.
-   * Passed through to ServiceProxy for Use()/Call() auto-selection.
+   * Passed through to ServiceProxy for Use() auto-selection.
    */
   selectionMap?: Record<string, string>;
   /**
