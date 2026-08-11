@@ -196,10 +196,6 @@ export class DomainClientUser {
       deviceId?: string;
     },
   ): Promise<LoginPayload> {
-    // V4.9.26: 登录是匿名操作，清除可能残留的会话 cookie（requestChallenge 响应会设置 DmpApiSession cookie，
-    // 若不清除，HttpAuthenticationMiddleware 会检测到 cookie 但用户未认证而返回 401）
-    clearSessionCookie();
-
     const result = await this.transport.execute<{ loginByContext: LoginPayload }>({
       field: "loginByContext",
       type: "mutation",
@@ -516,14 +512,4 @@ function createMemoryStorage(): Storage {
     },
     key: (index: number) => [...store.keys()][index] ?? null,
   };
-}
-
-/** 清除服务端会话 cookie（DmpApiSession），避免 HttpAuthenticationMiddleware 拦截匿名登录请求。 */
-function clearSessionCookie(): void {
-  if (typeof document === "undefined") return;
-  // 尝试多个可能的 cookie 名（框架默认 DmpApiSession，兼容自定义名称）
-  const names = ["DmpApiSession", "tkwwf_session"];
-  for (const name of names) {
-    document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; SameSite=Lax`;
-  }
 }
