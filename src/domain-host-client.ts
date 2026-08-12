@@ -69,6 +69,12 @@ export interface DomainHostClientOptions {
    * 默认: true
    */
   useSecureLogin?: boolean;
+  /**
+   * 注入自定义 Transport（mock/测试用）。
+   * 优先级最高，设置后忽略 transportType/endpoint。
+   * 典型值：MockTransport 实例（来自 @tkwf/tsclient-mock）
+   */
+  transport?: Transport;
 }
 
 export class DomainHostClient {
@@ -82,6 +88,7 @@ export class DomainHostClient {
   private retry?: DomainHostClientOptions["retry"];
   private selectionMap?: Record<string, string>;
   private useSecureLogin: boolean;
+  private injectedTransport?: Transport;
   private signHandler?: SignHandler;
   private globalErrorHandler?: GlobalErrorHandler;
   private pongInterval?: number;
@@ -112,6 +119,7 @@ export class DomainHostClient {
     this.retry = options?.retry;
     this.selectionMap = options?.selectionMap;
     this.useSecureLogin = options?.useSecureLogin ?? true;
+    this.injectedTransport = options?.transport;
     this.isBrowser =
       typeof window !== "undefined" && typeof document !== "undefined";
   }
@@ -259,6 +267,9 @@ export class DomainHostClient {
   }
 
   private createTransport(): Transport {
+    // 注入的 transport 优先（mock/测试用）
+    if (this.injectedTransport) return this.injectedTransport;
+
     const defaultRetry = { maxAttempts: 3, baseDelaySeconds: 1, maxDelaySeconds: 10, jitter: true, retryOn: ["NETWORK_ERROR", "SERVER_ERROR"] as ErrorCode[] };
     const opts = {
       url: this.endpoint,
