@@ -602,7 +602,7 @@ DMP-Lite.Merchant.AdminWeb/src/templates/ts-domain-client-examples.ts
 | 拦截器 | 请求/响应日志 / 请求签名 | ✅ |
 | Crypto | PBKDF2 / HMAC / 编码转换 | ✅ |
 | 工具类 | Pager / QueryString | ✅ |
-| React 集成 | 资源释放 / useRpcQuery | ✅ |
+| React 集成 | 资源释放 / useRpcQuery | — |
 
 ## 许可
 
