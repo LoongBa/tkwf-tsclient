@@ -26,7 +26,7 @@ import type {
   SortNode,
   PagedResponse,
 } from "./query-builder-types";
-import { PagedResponse as PagedResponseClass } from "./query-builder-types";
+import { PagedResponse as PagedResponseClass, AggregateFieldsBuilder, GroupBuilder } from "./query-builder-types";
 import { GraphQLTransport } from "./transport";
 import type { Transport } from "./transport";
 
@@ -445,5 +445,321 @@ describe("QueryBuilder", () => {
     // dummyAsc/dummyDesc 为纯函数，返回新的 SortNode
     expect(typeof dummyAsc).toBe("function");
     expect(typeof dummyDesc).toBe("function");
+  });
+
+  // ── v1.0.7: 操作符补齐（isNull/isNotNull） ──
+
+  it("T30: string isNull / isNotNull operators", () => {
+    let qb = createQueryBuilder<MockEntity>("MockEntity", createMockTransport());
+    qb.where(x => x.userName.isNull());
+    expect(qb["_filters"]).toEqual([{ userName: { eq: null } }]);
+
+    qb = createQueryBuilder<MockEntity>("MockEntity", createMockTransport());
+    qb.where(x => x.userName.isNotNull());
+    expect(qb["_filters"]).toEqual([{ userName: { neq: null } }]);
+  });
+
+  it("T31: number isNull / isNotNull operators", () => {
+    let qb = createQueryBuilder<MockEntity>("MockEntity", createMockTransport());
+    qb.where(x => x.amount.isNull());
+    expect(qb["_filters"]).toEqual([{ amount: { eq: null } }]);
+
+    qb = createQueryBuilder<MockEntity>("MockEntity", createMockTransport());
+    qb.where(x => x.amount.isNotNull());
+    expect(qb["_filters"]).toEqual([{ amount: { neq: null } }]);
+  });
+
+  it("T32: date isNull / isNotNull operators", () => {
+    let qb = createQueryBuilder<MockEntity>("MockEntity", createMockTransport());
+    qb.where(x => x.createTime.isNull());
+    expect(qb["_filters"]).toEqual([{ createTime: { eq: null } }]);
+
+    qb = createQueryBuilder<MockEntity>("MockEntity", createMockTransport());
+    qb.where(x => x.createTime.isNotNull());
+    expect(qb["_filters"]).toEqual([{ createTime: { neq: null } }]);
+  });
+
+  // ── v1.0.7: 字符串取反操作符 ──
+
+  it("T33: string negation operators (ncontains/nstartsWith/nendsWith)", () => {
+    let qb = createQueryBuilder<MockEntity>("MockEntity", createMockTransport());
+    qb.where(x => x.userName.ncontains("admin"));
+    expect(qb["_filters"]).toEqual([{ userName: { ncontains: "admin" } }]);
+
+    qb = createQueryBuilder<MockEntity>("MockEntity", createMockTransport());
+    qb.where(x => x.userName.nstartsWith("a"));
+    expect(qb["_filters"]).toEqual([{ userName: { nstartsWith: "a" } }]);
+
+    qb = createQueryBuilder<MockEntity>("MockEntity", createMockTransport());
+    qb.where(x => x.userName.nendsWith("z"));
+    expect(qb["_filters"]).toEqual([{ userName: { nendsWith: "z" } }]);
+  });
+
+  // ── v1.0.7: countAsync ──
+
+  it("T34: compileGraphQLCountMode produces correct GraphQL", () => {
+    const qb = createQueryBuilder<MockEntity>("MockEntity", createMockTransport());
+    qb.where(x => x.status.eq("Active"));
+    const query = qb["compileGraphQLCountMode"]();
+    expect(query).toBe(
+      'query { mockEntity(first: 1 where: { status: { eq: "Active" } }) { totalCount } }',
+    );
+  });
+
+  it("T35: countAsync returns totalCount from response", async () => {
+    const transport = createMockTransport();
+    vi.mocked(transport.executeRawGraphQL).mockResolvedValue({
+      mockEntity: { totalCount: 42 },
+    } as any);
+    const qb = createQueryBuilder<MockEntity>("MockEntity", transport);
+    qb.where(x => x.status.eq("Active"));
+    const count = await qb.countAsync();
+    expect(count).toBe(42);
+    expect(transport.executeRawGraphQL).toHaveBeenCalledWith(
+      expect.stringContaining("totalCount"),
+      undefined,
+    );
+  });
+
+  it("T36: countAsync returns 0 when totalCount missing", async () => {
+    const transport = createMockTransport();
+    vi.mocked(transport.executeRawGraphQL).mockResolvedValue({
+      mockEntity: {},
+    } as any);
+    const qb = createQueryBuilder<MockEntity>("MockEntity", transport);
+    const count = await qb.countAsync();
+    expect(count).toBe(0);
+  });
+
+  it("T37: countAsync throws on missing resolver field", async () => {
+    const transport = createMockTransport();
+    vi.mocked(transport.executeRawGraphQL).mockResolvedValue({} as any);
+    const qb = createQueryBuilder<MockEntity>("MockEntity", transport);
+    await expect(qb.countAsync()).rejects.toThrow("missing resolver field");
+  });
+
+  // ── v1.0.7: whereGroup ──
+
+  it("T38: whereGroup AND produces nested filter", () => {
+    const qb = createQueryBuilder<MockEntity>("MockEntity", createMockTransport());
+    qb.whereGroup(g => g.and(f => f.status.eq("Active")).and(f => f.amount.gt(100)));
+    expect(qb["_filters"]).toEqual([
+      { and: [{ status: { eq: "Active" } }, { amount: { gt: 100 } }] },
+    ]);
+  });
+
+  it("T39: whereGroup with single predicate is flattened", () => {
+    const qb = createQueryBuilder<MockEntity>("MockEntity", createMockTransport());
+    qb.whereGroup(g => g.and(f => f.status.eq("Active")));
+    expect(qb["_filters"]).toEqual([{ status: { eq: "Active" } }]);
+  });
+
+  it("T40: whereGroup empty group produces no filter", () => {
+    const qb = createQueryBuilder<MockEntity>("MockEntity", createMockTransport());
+    qb.whereGroup(g => {});
+    expect(qb["_filters"]).toEqual([]);
+  });
+
+  it("T41: whereGroup composes with existing where", () => {
+    const qb = createQueryBuilder<MockEntity>("MockEntity", createMockTransport());
+    qb.where(x => x.status.eq("Active"));
+    qb.whereGroup(g => g.and(f => f.amount.gt(100)).and(f => f.amount.lt(200)));
+    expect(qb["_filters"]).toEqual([
+      { status: { eq: "Active" } },
+      { and: [{ amount: { gt: 100 } }, { amount: { lt: 200 } }] },
+    ]);
+  });
+
+  // ── v1.0.7: clone ──
+
+  it("T42: clone creates independent copy", () => {
+    const qb = createQueryBuilder<MockEntity>("MockEntity", createMockTransport());
+    qb.where(x => x.status.eq("Active"));
+    qb.orderBy(x => x.createTime.desc());
+    qb.select({ id: true, userName: true });
+
+    const cloned = qb.clone();
+    // 修改原查询不影响克隆
+    qb.where(x => x.amount.gt(100));
+    qb.orderBy(x => x.id.asc());
+    qb.select({ id: true });
+
+    expect(cloned["_filters"]).toEqual([{ status: { eq: "Active" } }]);
+    expect(cloned["_sorts"]).toEqual([{ field: "createTime", desc: true }]);
+    expect(cloned["_fields"]).toEqual(["id", "userName"]);
+    // 原查询已变化
+    expect(qb["_filters"]).toHaveLength(2);
+    expect(qb["_sorts"]).toEqual([{ field: "id", desc: false }]);
+    expect(qb["_fields"]).toEqual(["id"]);
+  });
+
+  it("T43: clone copies page state and cursor cache", () => {
+    const qb = createQueryBuilder<MockEntity>("MockEntity", createMockTransport());
+    qb.page(3, 50);
+    qb["_cursorCache"].set(1, "cursor_1");
+    qb["_latestCursor"] = "cursor_1";
+
+    const cloned = qb.clone();
+    expect(cloned["_page"]).toBe(3);
+    expect(cloned["_pageSize"]).toBe(50);
+    expect(cloned["_cursorCache"].get(1)).toBe("cursor_1");
+    expect(cloned["_latestCursor"]).toBe("cursor_1");
+  });
+
+  // ── v1.0.7: orderByField / thenByField ──
+
+  it("T44: orderByField sets sort with ASC default", () => {
+    const qb = createQueryBuilder<MockEntity>("MockEntity", createMockTransport());
+    qb.orderByField("createTime");
+    expect(qb["_sorts"]).toEqual([{ field: "createTime", desc: false }]);
+  });
+
+  it("T45: orderByField DESC direction", () => {
+    const qb = createQueryBuilder<MockEntity>("MockEntity", createMockTransport());
+    qb.orderByField("createTime", "DESC");
+    expect(qb["_sorts"]).toEqual([{ field: "createTime", desc: true }]);
+  });
+
+  it("T46: thenByField appends sort", () => {
+    const qb = createQueryBuilder<MockEntity>("MockEntity", createMockTransport());
+    qb.orderByField("status", "ASC").thenByField("createTime", "DESC");
+    expect(qb["_sorts"]).toEqual([
+      { field: "status", desc: false },
+      { field: "createTime", desc: true },
+    ]);
+  });
+
+  it("T47: orderByField overrides previous sorts, thenByField appends", () => {
+    const qb = createQueryBuilder<MockEntity>("MockEntity", createMockTransport());
+    qb.orderByField("id", "DESC");
+    qb.orderByField("status"); // 覆盖
+    expect(qb["_sorts"]).toEqual([{ field: "status", desc: false }]);
+    qb.thenByField("createTime", "DESC"); // 追加
+    expect(qb["_sorts"]).toEqual([
+      { field: "status", desc: false },
+      { field: "createTime", desc: true },
+    ]);
+  });
+
+  // ── v1.0.7: 聚合查询 ──
+
+  it("T48: AggregateFieldsBuilder accumulates fields", () => {
+    const builder = new AggregateFieldsBuilder<any>();
+    builder.sum((f: any) => f.amount);
+    builder.count();
+    builder.avg((f: any) => f.quantity);
+    builder.min((f: any) => f.price);
+    builder.max((f: any) => f.total);
+    expect(builder.sumFields).toEqual(["amount"]);
+    expect(builder.hasCount).toBe(true);
+    expect(builder.avgFields).toEqual(["quantity"]);
+    expect(builder.minFields).toEqual(["price"]);
+    expect(builder.maxFields).toEqual(["total"]);
+  });
+
+  it("T49: compileGraphQLAggregateMode produces correct GraphQL", () => {
+    const qb = createQueryBuilder<MockEntity>("MockEntity", createMockTransport());
+    qb.aggregate(a => a.sum(f => f.amount).count());
+    const query = qb["compileGraphQLAggregateMode"]();
+    expect(query).toBe(
+      "query { mockEntity_aggregate { _count _sum { amount } } }",
+    );
+  });
+
+  it("T50: aggregate respects where conditions", () => {
+    const qb = createQueryBuilder<MockEntity>("MockEntity", createMockTransport());
+    qb.where(x => x.status.eq("Active"));
+    qb.aggregate(a => a.sum(f => f.amount).count());
+    const query = qb["compileGraphQLAggregateMode"]();
+    expect(query).toContain('where: { status: { eq: "Active" } }');
+  });
+
+  it("T51: toAggregateAsync returns AggregateResponse", async () => {
+    const transport = createMockTransport();
+    vi.mocked(transport.executeRawGraphQL).mockResolvedValue({
+      mockEntity_aggregate: { _count: 10, _sum: { amount: 1000 } },
+    } as any);
+    const qb = createQueryBuilder<MockEntity>("MockEntity", transport);
+    qb.aggregate(a => a.sum(f => f.amount).count());
+    const result = await qb.toAggregateAsync();
+    expect(result._count).toBe(10);
+    expect(result._sum).toEqual({ amount: 1000 });
+  });
+
+  it("T52: toAggregateAsync throws when aggregate() is not called", async () => {
+    const qb = createQueryBuilder<MockEntity>("MockEntity", createMockTransport());
+    await expect(qb.toAggregateAsync()).rejects.toThrow(
+      "aggregate() must be called before toAggregateAsync()",
+    );
+  });
+
+  it("T53: toAggregateAsync throws on missing resolver field", async () => {
+    const transport = createMockTransport();
+    vi.mocked(transport.executeRawGraphQL).mockResolvedValue({} as any);
+    const qb = createQueryBuilder<MockEntity>("MockEntity", transport);
+    qb.aggregate(a => a.count());
+    await expect(qb.toAggregateAsync()).rejects.toThrow("missing aggregate resolver field");
+  });
+
+  it("T54: aggregate count only (no numeric fields)", () => {
+    const qb = createQueryBuilder<MockEntity>("MockEntity", createMockTransport());
+    qb.aggregate(a => a.count());
+    const query = qb["compileGraphQLAggregateMode"]();
+    expect(query).toBe("query { mockEntity_aggregate { _count } }");
+  });
+
+  it("T55: compileGraphQLAggregateMode with avg/min/max", () => {
+    const qb = createQueryBuilder<MockEntity>("MockEntity", createMockTransport());
+    qb.aggregate(a => a.avg(f => f.amount).min(f => f.amount).max(f => f.amount));
+    const query = qb["compileGraphQLAggregateMode"]();
+    expect(query).toBe(
+      "query { mockEntity_aggregate { _avg { amount } _min { amount } _max { amount } } }",
+    );
+  });
+
+  it("T56: toAggregateAsync with avg/min/max response", async () => {
+    const transport = createMockTransport();
+    vi.mocked(transport.executeRawGraphQL).mockResolvedValue({
+      mockEntity_aggregate: {
+        _count: 10, _sum: { amount: 1000 },
+        _avg: { amount: 100 }, _min: { amount: 50 }, _max: { amount: 200 },
+      },
+    } as any);
+    const qb = createQueryBuilder<MockEntity>("MockEntity", transport);
+    qb.aggregate(a => a.sum(f => f.amount).count().avg(f => f.amount).min(f => f.amount).max(f => f.amount));
+    const result = await qb.toAggregateAsync();
+    expect(result._count).toBe(10);
+    expect(result._sum).toEqual({ amount: 1000 });
+    expect(result._avg).toEqual({ amount: 100 });
+    expect(result._min).toEqual({ amount: 50 });
+    expect(result._max).toEqual({ amount: 200 });
+  });
+
+  it("T57: clone copies aggregate state", () => {
+    const qb = createQueryBuilder<MockEntity>("MockEntity", createMockTransport());
+    qb.aggregate(a => a.sum(f => f.amount).count());
+    const cloned = qb.clone();
+    expect(cloned["_aggregateMode"]).toBe(true);
+    expect(cloned["_aggregateFields"]).toBeDefined();
+    // 原查询 aggregate 状态不变
+    expect(qb["_aggregateMode"]).toBe(true);
+  });
+
+  it("T58: aggregate with where compiles correctly", () => {
+    const qb = createQueryBuilder<MockEntity>("MockEntity", createMockTransport());
+    qb.where(x => x.status.eq("Active"));
+    qb.aggregate(a => a.count());
+    const query = qb["compileGraphQLAggregateMode"]();
+    expect(query).toBe(
+      'query { mockEntity_aggregate(where: { status: { eq: "Active" } }) { _count } }',
+    );
+  });
+
+  it("T59: export AggregateResponse, AggregateFieldsBuilder, GroupBuilder from index", async () => {
+    // 验证这些类型可以从 index.ts 导入
+    const mod = await import("./index");
+    expect(mod.AggregateResponse).toBeDefined();
+    expect(mod.AggregateFieldsBuilder).toBeDefined();
+    expect(mod.GroupBuilder).toBeDefined();
   });
 });

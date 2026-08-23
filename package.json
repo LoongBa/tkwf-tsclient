@@ -1,6 +1,6 @@
 {
   "name": "@tkwf/tsclient",
-  "version": "1.0.5",
+  "version": "1.0.7",
   "author": "LoongBa",
   "license": "MIT",
   "description": "TypeScript Domain client SDK for TKWF — GraphQL / REST transport, RPC proxy, session management",
@@ -33,6 +33,7 @@
     "url": "git+https://github.com/LoongBa/tkwf-tsclient.git"
   },
   "devDependencies": {
+    "graphql": "^17.0.2",
     "typescript": "^7.0.2",
     "vitest": "^4.1.9"
   }

@@ -2,7 +2,7 @@
 // codegen 为每个 Entity 生成继承 QueryBuilderBase 的子类（如 MerchantUserInfoQueryBuilder）。
 
 import type { Transport } from "./transport";
-import { PagedResponse } from "./query-builder-types";
+import { PagedResponse, AggregateResponse, AggregateFieldsBuilder, GroupBuilder } from "./query-builder-types";
 import type { PredicateNode, SortNode, StringFieldOperators, NumberFieldOperators, DateFieldOperators, BooleanFieldOperators } from "./query-builder-types";
 
 // ── 操作符工厂（v1.0.5 从 codegen 产物迁移至 SDK） ──
@@ -34,6 +34,13 @@ export function createStringOps<TFields>(field: string, proxy: TFields): StringF
     endsWith: (v: string) => new LeafNode<TFields>(field, "endsWith", v, proxy),
     in: (v: string[]) => new LeafNode<TFields>(field, "in", v, proxy),
     nin: (v: string[]) => new LeafNode<TFields>(field, "nin", v, proxy),
+    // v1.0.7: 空值操作符
+    isNull: () => new LeafNode<TFields>(field, "eq", null, proxy),
+    isNotNull: () => new LeafNode<TFields>(field, "neq", null, proxy),
+    // v1.0.7: 字符串取反
+    ncontains: (v: string) => new LeafNode<TFields>(field, "ncontains", v, proxy),
+    nstartsWith: (v: string) => new LeafNode<TFields>(field, "nstartsWith", v, proxy),
+    nendsWith: (v: string) => new LeafNode<TFields>(field, "nendsWith", v, proxy),
   };
 }
 
@@ -47,6 +54,9 @@ export function createNumberOps<TFields>(field: string, proxy: TFields): NumberF
     lte: (v: number) => new LeafNode<TFields>(field, "lte", v, proxy),
     in: (v: number[]) => new LeafNode<TFields>(field, "in", v, proxy),
     nin: (v: number[]) => new LeafNode<TFields>(field, "nin", v, proxy),
+    // v1.0.7: 空值操作符
+    isNull: () => new LeafNode<TFields>(field, "eq", null, proxy),
+    isNotNull: () => new LeafNode<TFields>(field, "neq", null, proxy),
   };
 }
 
@@ -58,6 +68,9 @@ export function createDateOps<TFields>(field: string, proxy: TFields): DateField
     gte: (v: string) => new LeafNode<TFields>(field, "gte", v, proxy),
     lt: (v: string) => new LeafNode<TFields>(field, "lt", v, proxy),
     lte: (v: string) => new LeafNode<TFields>(field, "lte", v, proxy),
+    // v1.0.7: 空值操作符
+    isNull: () => new LeafNode<TFields>(field, "eq", null, proxy),
+    isNotNull: () => new LeafNode<TFields>(field, "neq", null, proxy),
   };
 }
 
@@ -211,6 +224,9 @@ export abstract class QueryBuilderBase<
   protected _afterCursor?: string;
   protected _latestCursor?: string;
   protected _cursorCache = new Map<number, string>();
+  // v1.0.7: 聚合模式
+  protected _aggregateMode = false;
+  protected _aggregateFields?: AggregateFieldsBuilder<TFields>;
 
   constructor(
     protected transport: Transport,
@@ -310,6 +326,120 @@ export abstract class QueryBuilderBase<
     return result;
   }
 
+  // ── v1.0.7: 仅计数查询 ──
+
+  /**
+   * 仅获取记录数，不请求 nodes 字段。
+   * 编译为 `query { resolver(first: 1, where: ...) { totalCount } }`。
+   */
+  async countAsync(): Promise<number> {
+    const query = this.compileGraphQLCountMode();
+    const raw = await this.transport.executeRawGraphQL<Record<string, { totalCount: number }>>(query, this._sessionKey);
+    const result = raw?.[this.resolverField];
+    if (result === undefined) {
+      throw new Error(`QueryBuilder: GraphQL response missing resolver field '${this.resolverField}'. Available fields: ${raw ? Object.keys(raw).join(", ") : "none"}.`);
+    }
+    return result.totalCount ?? 0;
+  }
+
+  // ── v1.0.7: 条件分组 ──
+
+  /**
+   * 显式条件分组。默认 AND 分组，GroupBuilder 可链式调用 and()/or()。
+   */
+  whereGroup(builder: (g: GroupBuilder<TFields>) => void): this {
+    const group = new GroupBuilder<TFields>();
+    builder(group);
+    const filter = group.build(this.createFieldsProxy());
+    if (Object.keys(filter).length > 0) {
+      this._filters.push(filter);
+    }
+    this.invalidateCursor();
+    return this;
+  }
+
+  // ── v1.0.7: 查询克隆 ──
+
+  /** 深拷贝查询构建状态，返回独立副本。修改副本不影响原查询。 */
+  clone(): this {
+    const cloned = Object.create(Object.getPrototypeOf(this)) as this;
+    cloned.transport = this.transport;
+    cloned.resolverField = this.resolverField;
+    cloned._sessionKey = this._sessionKey;
+    cloned._filters = this._filters.map(f => ({ ...f }));
+    cloned._sorts = this._sorts.map(s => ({ ...s }));
+    cloned._fields = [...this._fields];
+    cloned._page = this._page;
+    cloned._pageSize = this._pageSize;
+    cloned._afterCursor = this._afterCursor;
+    cloned._latestCursor = this._latestCursor;
+    cloned._cursorCache = new Map(this._cursorCache);
+    cloned._aggregateMode = this._aggregateMode;
+    // aggregate() 每次调用都新建 AggregateFieldsBuilder（替换引用），
+    // 因此 clone 与原文指向同一 builder 实例不会导致交叉污染。
+    // 若后续改为就地 mutate，需同步改为深拷贝。
+    cloned._aggregateFields = this._aggregateFields;
+    return cloned;
+  }
+
+  // ── v1.0.7: 动态排序 ──
+
+  /**
+   * 按字段名动态排序（运行时）。覆盖已有排序条件。
+   * @param field - 字段名（通过 keyof TOrderByFields 编译期校验）
+   * @param direction - ASC 或 DESC（默认 ASC）
+   */
+  orderByField<K extends keyof TOrderByFields>(field: K, direction: "ASC" | "DESC" = "ASC"): this {
+    this._sorts = [{ field: String(field), desc: direction === "DESC" }];
+    this.invalidateCursor();
+    return this;
+  }
+
+  /**
+   * 追加动态排序条件。
+   * @param field - 字段名（通过 keyof TOrderByFields 编译期校验）
+   * @param direction - ASC 或 DESC（默认 ASC）
+   */
+  thenByField<K extends keyof TOrderByFields>(field: K, direction: "ASC" | "DESC" = "ASC"): this {
+    this._sorts.push({ field: String(field), desc: direction === "DESC" });
+    this.invalidateCursor();
+    return this;
+  }
+
+  // ── v1.0.7: 聚合查询 ──
+
+  /**
+   * 进入聚合模式，声明聚合字段。
+   * @param builder - 聚合字段声明回调（sum/count/avg/min/max）
+   */
+  aggregate(builder: (a: AggregateFieldsBuilder<TFields>) => void): this {
+    this._aggregateMode = true;
+    this._aggregateFields = new AggregateFieldsBuilder<TFields>();
+    builder(this._aggregateFields);
+    this.invalidateCursor();
+    return this;
+  }
+
+  /** 执行聚合查询，返回 AggregateResponse。必须在 aggregate() 之后调用。 */
+  async toAggregateAsync(): Promise<AggregateResponse> {
+    if (!this._aggregateMode || !this._aggregateFields) {
+      throw new Error("QueryBuilder: aggregate() must be called before toAggregateAsync().");
+    }
+    const query = this.compileGraphQLAggregateMode();
+    const raw = await this.transport.executeRawGraphQL<Record<string, AggregateResponse>>(query, this._sessionKey);
+    const result = raw?.[`${this.resolverField}_aggregate`];
+    if (result === undefined) {
+      throw new Error(`QueryBuilder: GraphQL response missing aggregate resolver field '${this.resolverField}_aggregate'. Available fields: ${raw ? Object.keys(raw).join(", ") : "none"}.`);
+    }
+    const resp = new AggregateResponse();
+    resp._count = result._count ?? 0;
+    resp._sum = result._sum ?? undefined;
+    resp._avg = result._avg ?? undefined;
+    resp._min = result._min ?? undefined;
+    resp._max = result._max ?? undefined;
+    return resp;
+  }
+
   // ── 内部方法 ──
 
   protected async executeAsync<T>(ct?: AbortSignal): Promise<T> {
@@ -394,6 +524,7 @@ export abstract class QueryBuilderBase<
 
   // ── GraphQL 编译器（基类默认实现，子类可选择性覆写） ──
 
+  /** 默认分页查询编译。 */
   protected compileGraphQL(): string {
     const fields = this._fields.length > 0
       ? this._fields.join(" ")
@@ -404,6 +535,35 @@ export abstract class QueryBuilderBase<
     const pageInfo = this._cursorCache.size > 0 || this._afterCursor
       ? " pageInfo { endCursor hasNextPage }" : "";
     return `query { ${this.resolverField}(first: ${this._pageSize}${afterClause}${whereClause}${orderClause}) { totalCount nodes { ${fields} }${pageInfo} } }`;
+  }
+
+  // ── v1.0.7: 仅计数模式编译 ──
+
+  /** 编译仅计数查询（不请求 nodes/pageInfo）。 */
+  protected compileGraphQLCountMode(): string {
+    const whereClause = this.buildWhereClause();
+    return `query { ${this.resolverField}(first: 1${whereClause}) { totalCount } }`;
+  }
+
+  // ── v1.0.7: 聚合模式编译 ──
+
+  /** 编译聚合查询。聚合 resolver 通常无分页参数，故不传 first。 */
+  protected compileGraphQLAggregateMode(): string {
+    const whereClause = this.buildWhereClause();
+    const aggFields = this._aggregateFields;
+    if (!aggFields) {
+      throw new Error("QueryBuilder: aggregate() must be called before compiling aggregate query.");
+    }
+    const parts: string[] = [];
+    if (aggFields.hasCount) parts.push("_count");
+    if (aggFields.sumFields.length > 0) parts.push(`_sum { ${aggFields.sumFields.join(" ")} }`);
+    if (aggFields.avgFields.length > 0) parts.push(`_avg { ${aggFields.avgFields.join(" ")} }`);
+    if (aggFields.minFields.length > 0) parts.push(`_min { ${aggFields.minFields.join(" ")} }`);
+    if (aggFields.maxFields.length > 0) parts.push(`_max { ${aggFields.maxFields.join(" ")} }`);
+    const args = whereClause ? whereClause.trimStart() : "";
+    return args
+      ? `query { ${this.resolverField}_aggregate(${args}) { ${parts.join(" ")} } }`
+      : `query { ${this.resolverField}_aggregate { ${parts.join(" ")} } }`;
   }
 
   protected createOrderByProxy(): TOrderByFields {

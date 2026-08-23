@@ -79,7 +79,15 @@ export class ServiceProxy {
                     sessionKey: this.sessionKey ?? undefined,
                     signal: options?.signal,
                   })
-                  .then(resolve)
+                  .then((result) => {
+                    // 解包 GraphQL `data` 字段键：execute() 返回 { [field]: 数据 }
+                    // （GraphQL 标准 data 对象。GraphQLTransport.parseResponse 返回 json.data）。
+                    // 消费端类型（生成代码 ChainablePromise<T>）声明为裸结果，此处还原为 T。
+                    // 防御性 fallback：REST 平铺响应（无字段键）时原样透传。
+                    const record = result as Record<string, unknown> | undefined;
+                    const value = record?.[field];
+                    resolve(value === undefined ? result : value);
+                  })
                   .catch((error: unknown) => {
                     // V4.8.7: 先触发用户级错误处理
                     if (this.userErrorHandler && error instanceof DomainClientError) {

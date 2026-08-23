@@ -193,4 +193,29 @@ describe("ServiceProxy", () => {
       expect(transport.execute).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe("response unwrapping", () => {
+    it("resolves with the field-keyed value（GraphQL data 形状）", async () => {
+      const transport = createMockTransport();
+      // GraphQLTransport 契约：execute 返回 { [field]: 数据 }
+      vi.mocked(transport.execute).mockResolvedValue({
+        getUser: { id: 1, name: "Alice" },
+      });
+      const proxy = new ServiceProxy({ transport });
+      const api = proxy.createUse();
+
+      const result = await api.getUser?.({ id: 1 });
+      expect(result).toEqual({ id: 1, name: "Alice" });
+    });
+
+    it("falls back to raw result when field key absent（REST 平铺形状）", async () => {
+      const transport = createMockTransport();
+      vi.mocked(transport.execute).mockResolvedValue({ status: "ok" });
+      const proxy = new ServiceProxy({ transport });
+      const api = proxy.createUse();
+
+      const result = await api.createUser?.({});
+      expect(result).toEqual({ status: "ok" });
+    });
+  });
 });

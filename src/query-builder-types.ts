@@ -27,6 +27,13 @@ export interface StringFieldOperators<TFields = any> {
   endsWith(val: string): PredicateNode<TFields>;
   in(val: string[]): PredicateNode<TFields>;
   nin(val: string[]): PredicateNode<TFields>;
+  // v1.0.7: 空值操作符
+  isNull(): PredicateNode<TFields>;
+  isNotNull(): PredicateNode<TFields>;
+  // v1.0.7: 字符串取反
+  ncontains(val: string): PredicateNode<TFields>;
+  nstartsWith(val: string): PredicateNode<TFields>;
+  nendsWith(val: string): PredicateNode<TFields>;
 }
 
 export interface NumberFieldOperators<TFields = any> {
@@ -38,6 +45,9 @@ export interface NumberFieldOperators<TFields = any> {
   lte(val: number): PredicateNode<TFields>;
   in(val: number[]): PredicateNode<TFields>;
   nin(val: number[]): PredicateNode<TFields>;
+  // v1.0.7: 空值操作符
+  isNull(): PredicateNode<TFields>;
+  isNotNull(): PredicateNode<TFields>;
 }
 
 export interface DateFieldOperators<TFields = any> {
@@ -47,6 +57,9 @@ export interface DateFieldOperators<TFields = any> {
   gte(val: string): PredicateNode<TFields>;
   lt(val: string): PredicateNode<TFields>;
   lte(val: string): PredicateNode<TFields>;
+  // v1.0.7: 空值操作符
+  isNull(): PredicateNode<TFields>;
+  isNotNull(): PredicateNode<TFields>;
 }
 
 export interface BooleanFieldOperators<TFields = any> {
@@ -140,3 +153,99 @@ export type SelectFieldsOf<TFields> = Partial<Record<keyof TFields, true>>;
 
 /** OrderByFields 映射派生：Record<keyof TFields, SortNode>。 */
 export type OrderByFieldsOf<TFields> = Record<keyof TFields, SortNode>;
+
+// ── v1.0.7: 条件分组 ──
+
+/**
+ * 条件分组构建器。通过 and() 添加谓词回调，build(proxy) 传入字段代理执行。
+ * P1 仅支持 AND 模式，OR 模式待后续扩展。
+ * @template TFields - 字段代理类型
+ */
+export class GroupBuilder<TFields> {
+  private _predicateFns: ((fields: TFields) => PredicateNode<TFields>)[] = [];
+
+  and(predicate: (fields: TFields) => PredicateNode<TFields>): this {
+    this._predicateFns.push(predicate);
+    return this;
+  }
+
+  build(proxy: TFields): object {
+    if (this._predicateFns.length === 0) return {};
+    const nodes = this._predicateFns.map(fn => fn(proxy));
+    if (nodes.length === 1) return nodes[0].toFilter();
+    return { and: nodes.map(n => n.toFilter()) };
+  }
+}
+
+// ── v1.0.7: 聚合查询 ──
+
+/** 聚合查询响应 DTO。对应服务端生成的 `{Entity}Aggregate` 类型。 */
+export class AggregateResponse {
+  _count = 0;
+  _sum?: Record<string, number>;
+  _avg?: Record<string, number>;
+  /** 最小值（数值或日期字符串）。 */
+  _min?: Record<string, number | string>;
+  /** 最大值（数值或日期字符串）。 */
+  _max?: Record<string, number | string>;
+}
+
+/**
+ * 聚合字段声明构建器。链式声明 sum/count/avg/min/max，字段名通过 Proxy 提取。
+ * @template TFields - 字段代理类型
+ */
+export class AggregateFieldsBuilder<TFields> {
+  private _sumFields: string[] = [];
+  private _count = false;
+  private _avgFields: string[] = [];
+  private _minFields: string[] = [];
+  private _maxFields: string[] = [];
+
+  /** 已声明的 sum 字段列表（只读快照）。 */
+  get sumFields(): readonly string[] { return this._sumFields; }
+  /** 是否已声明 count。 */
+  get hasCount(): boolean { return this._count; }
+  /** 已声明的 avg 字段列表。 */
+  get avgFields(): readonly string[] { return this._avgFields; }
+  /** 已声明的 min 字段列表。 */
+  get minFields(): readonly string[] { return this._minFields; }
+  /** 已声明的 max 字段列表。 */
+  get maxFields(): readonly string[] { return this._maxFields; }
+
+  private _createFieldProxy(): TFields {
+    return new Proxy({} as TFields, {
+      get: (_t: any, prop: string | symbol) => {
+        return typeof prop === "string" ? prop : "";
+      },
+    });
+  }
+
+  sum(selector: (fields: TFields) => any): this {
+    const fieldName = selector(this._createFieldProxy()) as string;
+    if (fieldName) this._sumFields.push(fieldName);
+    return this;
+  }
+
+  count(): this {
+    this._count = true;
+    return this;
+  }
+
+  avg(selector: (fields: TFields) => any): this {
+    const fieldName = selector(this._createFieldProxy()) as string;
+    if (fieldName) this._avgFields.push(fieldName);
+    return this;
+  }
+
+  min(selector: (fields: TFields) => any): this {
+    const fieldName = selector(this._createFieldProxy()) as string;
+    if (fieldName) this._minFields.push(fieldName);
+    return this;
+  }
+
+  max(selector: (fields: TFields) => any): this {
+    const fieldName = selector(this._createFieldProxy()) as string;
+    if (fieldName) this._maxFields.push(fieldName);
+    return this;
+  }
+}
