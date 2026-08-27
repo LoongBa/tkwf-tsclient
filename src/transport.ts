@@ -1,6 +1,7 @@
 import type { ErrorCode } from "./domain-client-error";
 import { DomainClientError, toErrorCode } from "./domain-client-error";
 import { BaseHttpTransport } from "./base-http-transport";
+import type { RpcEventData } from "./event";
 
 export interface RequestContext {
   field: string;
@@ -17,6 +18,8 @@ export interface ResponseContext<T = unknown> {
   data: T;
   durationMs: number;
   request: RequestContext;
+  /** V1.0.8: RPC 响应携带事件（ADR33 侧信道）。无事件时为 undefined。 */
+  events?: RpcEventData[];
 }
 
 export type SignHandler = (context: {
@@ -127,6 +130,11 @@ export class GraphQLTransport extends BaseHttpTransport {
       );
     }
     return data as T;
+  }
+
+  protected extractEvents(json: unknown, _headers: Headers): RpcEventData[] | undefined {
+    const extensions = (json as { extensions?: { tkwf?: { events?: RpcEventData[] } } })?.extensions?.tkwf?.events;
+    return Array.isArray(extensions) && extensions.length ? extensions : undefined;
   }
 
   // V4.9.20: 执行原始 GraphQL 查询字符串（QueryBuilder 使用）。

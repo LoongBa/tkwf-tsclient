@@ -1,6 +1,7 @@
 import { DomainClientError } from "./domain-client-error";
 import { BaseHttpTransport } from "./base-http-transport";
-import type { RequestContext, TransportOptions } from "./transport";
+import type { RequestContext, TransportOptions, ResponseContext } from "./transport";
+import { parseRpcEventEnvelope, base64UrlDecode, type RpcEventData } from "./event";
 import { QueryString } from "./query-string";
 
 export interface RestTransportOptions extends TransportOptions {
@@ -169,6 +170,26 @@ export class RestTransport extends BaseHttpTransport {
   }
 
   /**
+   * V1.0.8: 从 REST 响应头提取 RPC 事件。
+   *
+   * `X-TKWF-Events` 携带 Base64Url(UTF-8 JSON) 编码的事件信封。
+   * 全链路容忍失败（解码/解析失败一律丢弃），绝不阻断业务流。
+   */
+  protected extractEvents(_json: unknown, headers: Headers): RpcEventData[] | undefined {
+    const raw = headers.get("X-TKWF-Events");
+    if (!raw) return undefined;
+    // 截断标记——4KB 预算截断后 payload 是不完整 JSON，尽力解析失败则丢弃（不阻断业务）
+    if (headers.get("X-TKWF-Events-Truncated") === "true") {
+      console.warn("[tkwf] RPC events truncated (4KB budget), partial parse may fail");
+    }
+    let decoded: string;
+    try { decoded = base64UrlDecode(raw); }
+    catch { return undefined; }          // 解码失败 → 丢弃，不阻断业务
+    const env = parseRpcEventEnvelope(decoded); // 内部 JSON.parse try/catch → []
+    return env.length ? env : undefined;
+  }
+
+  /**
    * Upload a file via multipart/form-data POST.
    * REST-specific capability (not available on GraphQL transport).
    *
@@ -255,9 +276,11 @@ export class RestTransport extends BaseHttpTransport {
         ? performance.now() - startTime
         : Date.now() - (startTime as number);
 
+    // V1.0.8: 上传路径同样提取并携带事件（Oracle S2）
+    const events = this.extractEvents(data, response.headers);
     if (this.options.onResponse) {
       this.options.onResponse(
-        { data: data as T, durationMs, request: ctx },
+        { data: data as T, durationMs, request: ctx, ...(events ? { events } : {}) } satisfies ResponseContext<T>,
         ctx,
       );
     }

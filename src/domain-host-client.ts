@@ -8,6 +8,7 @@ import {
   type ResponseContext,
 } from "./transport";
 import { RestTransport } from "./rest-transport";
+import { TkwfEventBus, type EventHandler } from "./event";
 
 export type GlobalErrorHandler = (error: DomainClientError) => void;
 export type PongHandler = (status: PingResult) => void;
@@ -96,6 +97,7 @@ export class DomainHostClient {
   private pongTimer?: ReturnType<typeof setTimeout>;
   private abortController?: AbortController;
   private isBrowser: boolean;
+  private eventBus: TkwfEventBus;
 
   private onRequestHandler?: (
     req: RequestContext,
@@ -122,6 +124,7 @@ export class DomainHostClient {
     this.injectedTransport = options?.transport;
     this.isBrowser =
       typeof window !== "undefined" && typeof document !== "undefined";
+    this.eventBus = new TkwfEventBus();
   }
 
   /** Create a DomainHostClient instance */
@@ -175,6 +178,17 @@ export class DomainHostClient {
   ): this {
     this.onResponseHandler = handler;
     return this;
+  }
+
+  /** V1.0.8: 注册 RPC 事件 Handler（ADR33 侧信道派发）。返回 this 支持链式。 */
+  onEvent(eventName: string, handler: EventHandler): this {
+    this.eventBus.on(eventName, handler);
+    return this;
+  }
+
+  /** V1.0.8: 访问底层事件总线（高级用法：批量 on/off/clear）。 */
+  getEventBus(): TkwfEventBus {
+    return this.eventBus;
   }
 
   /** Get authenticated user.
@@ -259,6 +273,7 @@ export class DomainHostClient {
     this.globalErrorHandler = undefined;
     this.pongHandler = undefined;
     this.signHandler = undefined;
+    this.eventBus.clear();
   }
 
   /** Access the global error handler (for Use/Call proxy) */
@@ -275,7 +290,10 @@ export class DomainHostClient {
       url: this.endpoint,
       signHandler: this.signHandler,
       onRequest: this.onRequestHandler,
-      onResponse: this.onResponseHandler,
+      onResponse: (res: ResponseContext, req: RequestContext) => {
+        this.onResponseHandler?.(res, req);        // 用户 interceptor 优先
+        if (res.events?.length) this.eventBus.dispatch(res.events);  // V1.0.8 事件派发
+      },
       retry: this.retry ? { ...defaultRetry, ...this.retry } : undefined,
     };
 

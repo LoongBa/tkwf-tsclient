@@ -1,12 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { RestTransport } from "./rest-transport";
 
-function mockFetch(data: unknown, status = 200) {
+function mockFetch(data: unknown, status = 200, headers: Headers = new Headers()) {
   return vi.mocked(fetch).mockResolvedValueOnce({
     ok: status >= 200 && status < 300,
     status,
     text: () => Promise.resolve(JSON.stringify(data)),
     json: () => Promise.resolve(data),
+    headers,
   } as Response);
 }
 
@@ -270,6 +271,7 @@ describe("RestTransport", () => {
         ok: false, status: 401,
         text: () => Promise.resolve("{}"),
         json: () => Promise.resolve({}),
+        headers: new Headers(),
       } as Response);
       const transport = new RestTransport({ url: "http://localhost:5000" });
 
@@ -309,6 +311,165 @@ describe("RestTransport", () => {
       expect(call[0]).toBe("http://localhost:5000/api/upload");
       expect(call[1]?.method).toBe("POST");
       expect(call[1]?.body).toBeInstanceOf(FormData);
+    });
+  });
+
+  describe("V1.0.8 RPC events (header side channel)", () => {
+    // 无 @types/node：提供最小 Buffer 类型（运行时为全局 Buffer，Node ≥18 支持 base64url）
+    const encode = (env: unknown): string =>
+      Buffer.from(JSON.stringify(env), "utf-8").toString("base64url");
+
+    // 带真实 Headers 的 mock fetch（execute() 路径走 response.text()）
+    function mockFetchWithHeaders(body: unknown, headers: Headers, status = 200) {
+      return vi.mocked(fetch).mockResolvedValueOnce({
+        ok: status >= 200 && status < 300,
+        status,
+        text: () => Promise.resolve(JSON.stringify(body)),
+        json: () => Promise.resolve(body),
+        headers,
+      } as Response);
+    }
+
+    it("提取：X-TKWF-Events 头解码后 onResponse 收到事件数组，data 原样透传", async () => {
+      const event = {
+        name: "OrderCreated",
+        type: "T.Events.OrderCreatedEvent",
+        data: { orderId: 1 },
+        timestamp: "2026-08-26T12:00:00Z",
+      };
+      const headers = new Headers({ "X-TKWF-Events": encode({ events: [event] }) });
+      mockFetchWithHeaders({ items: [{ id: 1 }] }, headers);
+
+      let received: { events?: unknown; data?: unknown } | undefined;
+      const transport = new RestTransport({
+        url: "http://localhost:5000",
+        onResponse: (res) => { received = res; },
+      });
+
+      const data = await transport.execute({ field: "users", type: "query" });
+
+      expect(data).toEqual({ items: [{ id: 1 }] });
+      expect(received?.events).toEqual([event]);
+    });
+
+    it("无头：无 X-TKWF-Events 时 events === undefined", async () => {
+      mockFetchWithHeaders({ ok: true }, new Headers());
+
+      let received: { events?: unknown } | undefined;
+      const transport = new RestTransport({
+        url: "http://localhost:5000",
+        onResponse: (res) => { received = res; },
+      });
+
+      await transport.execute({ field: "ping", type: "query" });
+
+      expect(received?.events).toBeUndefined();
+    });
+
+    it("截断标记：X-TKWF-Events-Truncated 时尽力解析失败则丢弃（console.warn），不阻断业务", async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      // 合法 Base64Url，但截断后为不完整 JSON → JSON.parse 失败 → [] → events undefined
+      const partial = Buffer.from('{"events":[{"name":"OrderCreated"', "utf-8").toString("base64url");
+      const headers = new Headers({
+        "X-TKWF-Events": partial,
+        "X-TKWF-Events-Truncated": "true",
+      });
+      mockFetchWithHeaders({ items: [{ id: 1 }] }, headers);
+
+      let received: { events?: unknown; data?: unknown } | undefined;
+      const transport = new RestTransport({
+        url: "http://localhost:5000",
+        onResponse: (res) => { received = res; },
+      });
+
+      // 不得抛错——事件尽力而为，业务结果仍正常返回
+      const data = await transport.execute({ field: "users", type: "query" });
+
+      expect(warnSpy).toHaveBeenCalled();
+      expect(received?.events).toBeUndefined();
+      expect(data).toEqual({ items: [{ id: 1 }] });
+    });
+
+    it("非法 Base64Url：解码失败丢弃，不阻断业务", async () => {
+      const headers = new Headers({ "X-TKWF-Events": "!!!not-base64!!!" });
+      mockFetchWithHeaders({ ok: true }, headers);
+
+      let received: { events?: unknown; data?: unknown } | undefined;
+      const transport = new RestTransport({
+        url: "http://localhost:5000",
+        onResponse: (res) => { received = res; },
+      });
+
+      const data = await transport.execute({ field: "ping", type: "query" });
+
+      expect(received?.events).toBeUndefined();
+      expect(data).toEqual({ ok: true });
+    });
+
+    it("空事件数组：{events:[]} → events === undefined", async () => {
+      const headers = new Headers({ "X-TKWF-Events": encode({ events: [] }) });
+      mockFetchWithHeaders({ ok: true }, headers);
+
+      let received: { events?: unknown } | undefined;
+      const transport = new RestTransport({
+        url: "http://localhost:5000",
+        onResponse: (res) => { received = res; },
+      });
+
+      await transport.execute({ field: "ping", type: "query" });
+
+      expect(received?.events).toBeUndefined();
+    });
+
+    it("中文 UTF-8 事件名 round-trip：解码后事件不损坏", async () => {
+      const event = {
+        name: "订单创建",
+        type: "T.Events.OrderCreatedEvent",
+        data: { 订单: "abc" },
+        timestamp: "2026-08-26T12:00:00Z",
+      };
+      const headers = new Headers({ "X-TKWF-Events": encode({ events: [event] }) });
+      mockFetchWithHeaders({ ok: true }, headers);
+
+      let received: { events?: unknown } | undefined;
+      const transport = new RestTransport({
+        url: "http://localhost:5000",
+        onResponse: (res) => { received = res; },
+      });
+
+      await transport.execute({ field: "ping", type: "query" });
+
+      expect(received?.events).toEqual([event]);
+    });
+
+    it("uploadFile 路径：响应头同样提取并派发事件（Oracle S2）", async () => {
+      const event = {
+        name: "FileUploaded",
+        type: "T.Events.FileUploadedEvent",
+        data: { url: "x" },
+        timestamp: "2026-08-26T12:00:00Z",
+      };
+      const headers = new Headers({ "X-TKWF-Events": encode({ events: [event] }) });
+      vi.mocked(fetch).mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ url: "x" }),
+        headers,
+      } as Response);
+
+      let received: { events?: unknown; data?: unknown } | undefined;
+      const transport = new RestTransport({
+        url: "http://localhost:5000",
+        onResponse: (res) => { received = res; },
+      });
+
+      const result = await transport.uploadFile<{ url: string }>(
+        "merchant/upload",
+        new Blob(["x"]),
+      );
+
+      expect(result.url).toBe("x");
+      expect(received?.events).toEqual([event]);
     });
   });
 });

@@ -6,6 +6,7 @@ import type {
   RequestContext,
   ResponseContext,
 } from "./transport";
+import type { RpcEventData } from "./event";
 
 /**
  * Base class for HTTP-based transport implementations.
@@ -72,7 +73,9 @@ export abstract class BaseHttpTransport implements Transport {
     }
 
     // ③ fetch + retry
-    const data = await this.executeWithRetry<T>(async () => {
+    const { data, json, headers } = await this.executeWithRetry<{
+      data: T; json: unknown; headers: Headers;
+    }>(async () => {
       let response: Response;
       try {
         response = await fetch(request.url, {
@@ -112,7 +115,8 @@ export abstract class BaseHttpTransport implements Transport {
       }
 
       const json = JSON.parse(bodyText);
-      return this.parseResponse<T>(json, response.status);
+      const data = this.parseResponse<T>(json, response.status);
+      return { data, json, headers: response.headers };
     }, ctx.field);
 
     // ④ onResponse callback
@@ -121,9 +125,10 @@ export abstract class BaseHttpTransport implements Transport {
         ? performance.now() - startTime
         : Date.now() - (startTime as number);
 
+    const events = this.extractEvents(json, headers);
     if (this.options.onResponse) {
       this.options.onResponse(
-        { data: data as T, durationMs, request: ctx } satisfies ResponseContext<T>,
+        { data: data as T, durationMs, request: ctx, ...(events ? { events } : {}) } satisfies ResponseContext<T>,
         ctx,
       );
     }
@@ -139,6 +144,16 @@ export abstract class BaseHttpTransport implements Transport {
    * @param status - HTTP status code (for error mapping)
    */
   protected abstract parseResponse<T>(json: unknown, status: number): T;
+
+  /**
+   * V1.0.8: 从响应中提取 RPC 事件载荷（ADR33 侧信道）。
+   * @param json    - 已解析的响应 JSON（GraphQL 用 extensions；REST 用不到）
+   * @param headers - fetch Response 头（REST 用 X-TKWF-Events）
+   * @returns 事件数组；无事件返回 undefined
+   */
+  protected extractEvents(_json: unknown, _headers: Headers): RpcEventData[] | undefined {
+    return undefined;
+  }
 
   // ── Retry machinery ──────────────────────────────────────────────────────
 

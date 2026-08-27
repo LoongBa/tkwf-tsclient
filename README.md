@@ -343,6 +343,46 @@ Tkwf.configure("default", {
 });
 ```
 
+### 事件监听（V1.0.8）
+
+服务端可在 RPC 响应侧信道携带领域事件（GraphQL `extensions.tkwf.events` / REST `X-TKWF-Events` 响应头）。客户端通过 `onEvent` 注册 Handler，每次响应自动解包派发——**不破坏业务返回值，事件走独立侧信道**：
+
+```typescript
+const host = DomainHostClient.init("my-app", {
+  endpoint: "/graphql",
+});
+
+// 注册事件 Handler（事件名匹配 RpcEventData.name）
+host.onEvent("OrderCreated", (event) => {
+  console.log(`订单已创建：${JSON.stringify(event.data)}`);
+});
+
+// 终端或批量管理（高级用法）
+const bus = host.getEventBus();
+bus.on("OrderShipped", (event) => { /* ... */ });
+bus.off("OrderShipped", handler);   // 显式注销
+bus.clear();                        // 清空所有 Handler
+```
+
+事件载荷结构：
+
+```typescript
+interface RpcEventData {
+  name: string;           // 事件名（如 "OrderCreated"）
+  type: string;           // 完整类型名（如 "TKW.MyProject.Events.OrderCreatedEvent"）
+  data: unknown;          // 事件字段（JSON 化）
+  triggeredBy?: string;   // 触发者（可选）
+  timestamp: string;      // ISO 时间戳
+  correlationId?: string; // 关联 ID（可选）
+}
+```
+
+**特性**：
+- 优先级：用户 `onResponse` interceptor 先于事件派发触发
+- 容错：单条事件解析失败自动跳过（不丢整个侧信道）；事件 Handler 抛错不外泄
+- 无事件响应时 `res.events === undefined`，现有行为完全不变
+- `dispose()` 后事件不再派发（Handler 已清空）
+
 ### 资源释放
 
 ```typescript

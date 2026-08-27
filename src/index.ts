@@ -30,6 +30,10 @@ export type { DomainClientUserOptions, LoginPayload, PingResult, ChallengeRespon
 export { DomainHostClient } from "./domain-host-client";
 export type { DomainHostClientOptions, PongHandler } from "./domain-host-client";
 
+// V1.0.8 — RPC 响应携带事件（ADR33 侧信道）
+export { TkwfEventBus, parseRpcEventEnvelope, base64UrlDecode } from "./event";
+export type { RpcEventData, RpcEventEnvelope, EventHandler } from "./event";
+
 // V1.0.4 — Tkwf 门面工厂
 export { Tkwf } from "./tkwf";
 export type { TkwfConfig } from "./tkwf";

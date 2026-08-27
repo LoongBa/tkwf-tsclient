@@ -386,4 +386,151 @@ describe("GraphQLTransport", () => {
       expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2);
     });
   });
+
+  describe("V1.0.8 RPC events (extensions side channel)", () => {
+    const event = {
+      name: "OrderCreated",
+      type: "T.X.OrderCreatedEvent",
+      data: { orderId: 1 },
+      timestamp: "2026-08-26T12:00:00Z",
+    };
+
+    it("从 extensions.tkwf.events 提取事件数组并注入 ResponseContext", async () => {
+      const onResponse = vi.fn();
+      const events = [event];
+      mockFetch({ data: { ok: true }, extensions: { tkwf: { events } } });
+      const transport = new GraphQLTransport({ url: "/graphql", onResponse });
+
+      const result = await transport.execute<{ ok: boolean }>({ field: "ping", type: "query" });
+
+      expect(result).toEqual({ ok: true });
+      expect(onResponse).toHaveBeenCalledTimes(1);
+      const [res] = onResponse.mock.calls[0];
+      // 事件经侧信道注入 ResponseContext，业务 data 不受影响
+      expect(res.events).toEqual(events);
+      expect(res.data).toEqual({ ok: true });
+    });
+
+    it("响应携带事件时业务 data 原样透传（事件不泄漏进返回结果）", async () => {
+      mockFetch({
+        data: { ok: true },
+        extensions: { tkwf: { events: [event] } },
+      });
+      const transport = new GraphQLTransport({ url: "/graphql" });
+
+      const result = await transport.execute<{ ok: boolean }>({ field: "ping", type: "query" });
+
+      expect(result).toEqual({ ok: true });
+    });
+
+    it("响应无 extensions 时 events 为 undefined 且 onResponse 仍触发一次", async () => {
+      const onResponse = vi.fn();
+      mockFetch({ data: { ok: true } });
+      const transport = new GraphQLTransport({ url: "/graphql", onResponse });
+
+      await transport.execute({ field: "ping", type: "query" });
+
+      expect(onResponse).toHaveBeenCalledTimes(1);
+      const [res] = onResponse.mock.calls[0];
+      expect(res.events).toBeUndefined();
+    });
+
+    it("extensions.tkwf.events 为空数组时 events 为 undefined", async () => {
+      const onResponse = vi.fn();
+      mockFetch({ data: { ok: true }, extensions: { tkwf: { events: [] } } });
+      const transport = new GraphQLTransport({ url: "/graphql", onResponse });
+
+      await transport.execute({ field: "ping", type: "query" });
+
+      expect(onResponse).toHaveBeenCalledTimes(1);
+      const [res] = onResponse.mock.calls[0];
+      expect(res.events).toBeUndefined();
+    });
+
+    it("extensions.tkwf.events 非数组时 events 为 undefined", async () => {
+      const onResponse = vi.fn();
+      mockFetch({ data: { ok: true }, extensions: { tkwf: { events: "not-an-array" } } });
+      const transport = new GraphQLTransport({ url: "/graphql", onResponse });
+
+      await transport.execute({ field: "ping", type: "query" });
+
+      expect(onResponse).toHaveBeenCalledTimes(1);
+      const [res] = onResponse.mock.calls[0];
+      expect(res.events).toBeUndefined();
+    });
+
+    it("extensions 存在但无 tkwf 键时 events 为 undefined", async () => {
+      const onResponse = vi.fn();
+      mockFetch({ data: { ok: true }, extensions: { trace: "x" } });
+      const transport = new GraphQLTransport({ url: "/graphql", onResponse });
+
+      await transport.execute({ field: "ping", type: "query" });
+
+      expect(onResponse).toHaveBeenCalledTimes(1);
+      const [res] = onResponse.mock.calls[0];
+      expect(res.events).toBeUndefined();
+    });
+
+    it("单个响应携带多个事件时全部原样提取", async () => {
+      const onResponse = vi.fn();
+      const events = [
+        event,
+        { ...event, name: "OrderShipped", type: "T.X.OrderShippedEvent", data: { orderId: 2 } },
+      ];
+      mockFetch({ data: { ok: true }, extensions: { tkwf: { events } } });
+      const transport = new GraphQLTransport({ url: "/graphql", onResponse });
+
+      await transport.execute<{ ok: boolean }>({ field: "ping", type: "query" });
+
+      expect(onResponse).toHaveBeenCalledTimes(1);
+      const [res] = onResponse.mock.calls[0];
+      expect(res.events).toEqual(events);
+    });
+
+    it("executeRawGraphQL 路径（field: raw）同样提取 events", async () => {
+      const onResponse = vi.fn();
+      const events = [event];
+      mockFetch({ data: { me: "ok" }, extensions: { tkwf: { events } } });
+      const transport = new GraphQLTransport({ url: "/graphql", onResponse });
+
+      const result = await transport.executeRawGraphQL<{ me: string }>("{ me }");
+
+      expect(result).toEqual({ me: "ok" });
+      expect(onResponse).toHaveBeenCalledTimes(1);
+      const [res] = onResponse.mock.calls[0];
+      // executeRawGraphQL 构建的 ctx.field 为 "raw"
+      expect(res.request.field).toBe("raw");
+      expect(res.events).toEqual(events);
+    });
+
+    it("401 失败响应不触发 onResponse（事件不派发）", async () => {
+      const onResponse = vi.fn();
+      mockFetchResponse({
+        ok: false,
+        status: 401,
+        text: () => Promise.resolve(JSON.stringify({ extensions: { tkwf: { events: [event] } } })),
+        json: () => Promise.resolve({}),
+      } as Response);
+      const transport = new GraphQLTransport({ url: "/graphql", onResponse });
+
+      await expect(
+        transport.execute({ field: "me", type: "query" }),
+      ).rejects.toMatchObject({ code: "AUTH_EXPIRED" });
+
+      expect(onResponse).not.toHaveBeenCalled();
+    });
+
+    it("错误响应 data 含 extensions 时不干扰错误码映射（AUTH_FAILED → AUTH_EXPIRED）", async () => {
+      mockFetch({
+        data: null,
+        errors: [{ message: "bad credentials", extensions: { code: "AUTH_FAILED" } }],
+        extensions: { tkwf: { events: [event] } },
+      });
+      const transport = new GraphQLTransport({ url: "/graphql" });
+
+      await expect(
+        transport.execute({ field: "login", type: "mutation" }),
+      ).rejects.toMatchObject({ code: "AUTH_EXPIRED" });
+    });
+  });
 });
