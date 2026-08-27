@@ -2,6 +2,7 @@ import type { ErrorCode } from "./domain-client-error";
 import { DomainClientError, toErrorCode } from "./domain-client-error";
 import { BaseHttpTransport } from "./base-http-transport";
 import type { RpcEventData } from "./event";
+import { parseRpcEventEnvelope } from "./event";
 
 export interface RequestContext {
   field: string;
@@ -133,8 +134,12 @@ export class GraphQLTransport extends BaseHttpTransport {
   }
 
   protected extractEvents(json: unknown, _headers: Headers): RpcEventData[] | undefined {
-    const extensions = (json as { extensions?: { tkwf?: { events?: RpcEventData[] } } })?.extensions?.tkwf?.events;
-    return Array.isArray(extensions) && extensions.length ? extensions : undefined;
+    const extensions = (json as { extensions?: { tkwf?: { events?: unknown[] } } })?.extensions?.tkwf?.events;
+    if (!Array.isArray(extensions) || extensions.length === 0) return undefined;
+    // Oracle S1: 与 REST 路径一致，经 parseRpcEventEnvelope 逐条过滤——畸形条目（如 null/缺 name）
+    // 不进入 res.events，也不暴露给用户 onResponse（对齐"单条失败不丢整个侧信道"语义）。
+    const events = parseRpcEventEnvelope({ events: extensions });
+    return events.length ? events : undefined;
   }
 
   // V4.9.20: 执行原始 GraphQL 查询字符串（QueryBuilder 使用）。

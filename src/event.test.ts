@@ -274,4 +274,14 @@ describe("TkwfEventBus", () => {
     expect(consoleSpy).toHaveBeenCalledWith("[tkwf] event handler error", err);
     consoleSpy.mockRestore();
   });
+
+  it("emit 畸形事件（null / 缺 name / name 非 string）静默 no-op，不抛错（Oracle M1）", () => {
+    const handler = vi.fn();
+    bus.on("A", handler);
+    // 应逐个 dispatch 全畸形条目且不抛错
+    expect(() =>
+      (bus.dispatch as (x: unknown) => void)([null, undefined, { name: 42 }, {}]),
+    ).not.toThrow();
+    expect(handler).not.toHaveBeenCalled();
+  });
 });

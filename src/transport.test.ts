@@ -532,5 +532,32 @@ describe("GraphQLTransport", () => {
         transport.execute({ field: "login", type: "mutation" }),
       ).rejects.toMatchObject({ code: "AUTH_EXPIRED" });
     });
+
+    it("畸形 events 条目（null）经 parseRpcEventEnvelope 过滤，业务结果不受影响（Oracle M1/S1）", async () => {
+      const onResponse = vi.fn();
+      // 服务端发送 events:[null] —— 必须被过滤，不得抛错打断业务结果
+      mockFetch({ data: { ok: true }, extensions: { tkwf: { events: [null, event] } } });
+      const transport = new GraphQLTransport({ url: "/graphql", onResponse });
+
+      const result = await transport.execute<{ ok: boolean }>({ field: "ping", type: "query" });
+
+      expect(result).toEqual({ ok: true });
+      expect(onResponse).toHaveBeenCalledTimes(1);
+      const [res] = onResponse.mock.calls[0];
+      // null 条目被跳过，仅保留合法事件
+      expect(res.events).toEqual([event]);
+    });
+
+    it("events 全为畸形条目时 events 为 undefined（不暴露、不派发）", async () => {
+      const onResponse = vi.fn();
+      mockFetch({ data: { ok: true }, extensions: { tkwf: { events: [null, { name: 42 }] } } });
+      const transport = new GraphQLTransport({ url: "/graphql", onResponse });
+
+      await transport.execute({ field: "ping", type: "query" });
+
+      expect(onResponse).toHaveBeenCalledTimes(1);
+      const [res] = onResponse.mock.calls[0];
+      expect(res.events).toBeUndefined();
+    });
   });
 });

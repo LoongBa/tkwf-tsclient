@@ -19,18 +19,25 @@ TypeScript Domain 客户端 SDK，为 TKWF 框架提供 GraphQL/REST 双协议�
 
 ## 3. 迭代开发流程
 
-1. 新功能开发前 → 编写 `docs/迭代开发过程/V{主版本}/v{version}-{feat}-开发方案.md`
-2. 方案经审核通过后 → 按方案执行开发
-3. 开发完成 → 审查代码 → 编写 `docs/迭代开发过程/V{主版本}/v{version}-{feat}-审核报告.md`
-4. 测试（`npm test`）→ 构建（`npm run build`）→ 提交
-5. **推送（push）但不打 tag** → **tag 和发布必须征求同意**（见 §4）
-6. 发布流程：用户确认后 → `git tag v{version}` → `git push origin v{version}` → GitHub Actions 自动发布到 npm
+**完整闭环**（每轮迭代必须按此顺序执行，缺失任一环节视为未完成）：
+
+1. **编写开发方案** → `docs/迭代开发过程/V{主版本}/v{version}-{feat}-开发方案.md`
+2. **Oracle 审核方案** → 由 Sisyphus 发起 Oracle 审核，必修项（M#）必须全部纳入方案后修订，建议项（S#）评估后纳入或明确放弃
+3. **实施编码** → 方案经审核通过后，按方案执行开发
+4. **编写审核报告** → 开发完成 → Sisyphus 审查代码 → 编写 `docs/迭代开发过程/V{主版本}/v{version}-{feat}-审核报告.md`
+5. **Oracle 审核代码** → 由 Sisyphus 发起 Oracle 审核实现代码（复杂设计/实现必做）
+6. **根据审核建议调整** → Oracle 审核意见落地：必修项修订实现 + 更新审核报告；若调整涉及方案范围/设计决策变更 → 同步修订开发方案
+7. **Sisyphus 亲自复审** → 对调整后的代码逐项复核（验证清单 + 全量测试 + 构建），更新审核报告结论
+8. **测试 + 构建**（`npm test` → `npm run build`）→ **提交**
+9. **推送（push）但不打 tag** → **tag 和发布必须征求同意**（见 §4）
+10. 发布流程：用户确认后 → `git tag v{version}` → `git push origin v{version}` → GitHub Actions 自动发布到 npm
 
 ### 代码审查
 
 - **默认**：由 Sisyphus 审查代码
-- **复杂设计/实现**：由 Sisyphus 判断，建议用户使用 Oracle 审核
-- **注意**：Momus 仅审核开发方案（`.sisyphus/plans/*.md`），**拒绝审查代码**
+- **复杂设计/实现**：必须经 Oracle 审核（环节 5）；由 Sisyphus 判断并发起
+- **方案审核**：Oracle 审核开发方案（环节 2）；Momus 仅审核 `.sisyphus/plans/*.md` 的开发方案，**拒绝审查代码**
+- **闭环原则**：Oracle 审核意见未落地前，不得进入提交环节；提交前 Sisyphus 必须亲自复审
 
 ### 提交纪律
 
@@ -48,7 +55,7 @@ TypeScript Domain 客户端 SDK，为 TKWF 框架提供 GraphQL/REST 双协议�
 ## 5. CI 与测试
 
 - CI：`npm ci` → `npm run build` → `npx vitest run`
-- 发布前必须确保 160+ 测试全部通过
+- 发布前必须确保全量测试通过（当前 283 条，随迭代增长）
 - 构建产物 `dist/` 由 CI 生成，不提交到仓库
 
 ## 6. 代码纪律
@@ -64,4 +71,6 @@ TypeScript Domain 客户端 SDK，为 TKWF 框架提供 GraphQL/REST 双协议�
   - 开发方案：`v{version}-{feat}-开发方案.md`，存放于 `docs/迭代开发过程/V{主版本}/`
   - 审核报告：`v{version}-{feat}-审核报告.md`，存放于同一目录
 - 开发方案必须在开发前编写并审核，审核报告在开发完成后审查代码时编写
+- 审核报告随 Oracle 审核意见落地持续更新（必修项修订后需反映在报告中）
+- 若代码调整涉及方案范围/设计决策变更 → 同步修订开发方案
 - 不主动创建其他额外文档文件（除非被明确要求）

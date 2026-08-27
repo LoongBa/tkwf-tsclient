@@ -139,6 +139,9 @@ export class TkwfEventBus {
    * @param event 待派发的领域事件
    */
   emit(event: RpcEventData): void {
+    // Oracle M1: 防御畸形条目（如 GraphQL 侧信道 events:[null]）——event 非对象/无 name 时
+    // 直接 no-op，禁止抛错穿透 onResponse 打断业务结果（事件是尽力而为的附加）。
+    if (!event || typeof event.name !== "string") return;
     const set = this.handlers.get(event.name);
     if (!set) return;
     for (const handler of set) {
