@@ -95,7 +95,6 @@ export class DomainHostClient {
   private pongInterval?: number;
   private pongHandler?: PongHandler;
   private pongTimer?: ReturnType<typeof setTimeout>;
-  private abortController?: AbortController;
   private isBrowser: boolean;
   private eventBus: TkwfEventBus;
 
@@ -261,15 +260,16 @@ export class DomainHostClient {
    *
    * Actions:
    * - Clears heartbeat timers
-   * - Aborts pending requests
    * - Releases internal references
+   *
+   * Note (V1.0.9): 请求取消为 best-effort——进行中的 fetch 依赖调用方传入的
+   * AbortSignal（transport.execute({ signal })）链路取消，dispose 不主动 abort。
    *
    * React: `useEffect(() => { return () => host.dispose(); }, [])`
    * Safe to call multiple times — subsequent calls are no-ops.
    */
   dispose(): void {
     this.stopHeartbeat();
-    this.abortController?.abort();
     this.globalErrorHandler = undefined;
     this.pongHandler = undefined;
     this.signHandler = undefined;

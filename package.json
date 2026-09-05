@@ -1,6 +1,6 @@
 {
   "name": "@tkwf/tsclient",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "author": "LoongBa",
   "license": "MIT",
   "description": "TypeScript Domain client SDK for TKWF — GraphQL / REST transport, RPC proxy, session management",
@@ -15,6 +15,10 @@
     "./src": {
       "types": "./src/index.ts",
       "import": "./src/index.ts"
+    },
+    "./cache": {
+      "types": "./dist/cache.d.ts",
+      "import": "./dist/cache.js"
     }
   },
   "files": [
@@ -32,7 +36,20 @@
     "type": "git",
     "url": "git+https://github.com/LoongBa/tkwf-tsclient.git"
   },
+  "peerDependencies": {
+    "@tanstack/query-core": "^5.0.0",
+    "graphql": "^16.0.0 || ^17.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@tanstack/query-core": {
+      "optional": true
+    },
+    "graphql": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@tanstack/query-core": "5.102.8",
     "graphql": "^17.0.2",
     "typescript": "^7.0.2",
     "vitest": "^4.1.9"

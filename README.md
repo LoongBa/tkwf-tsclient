@@ -607,6 +607,83 @@ const host = DomainHostClient.init("my-app", {
 });
 ```
 
+## RPC 缓存（V1.0.9，可选）
+
+`@tkwf/tsclient` 核心保持零运行时依赖；缓存能力借鉴 [TanStack Query](https://tanstack.com/query) 的框架无关核心 `@tanstack/query-core`（缓存/去重/SWR/失效），以 **optional peerDependency + 懒加载** 形态接入：不安装 query-core 时行为与之前完全一致，安装后通过 `@tkwf/tsclient/cache` 子路径获得缓存 API。
+
+### 安装
+
+```bash
+# React 消费端（若已用 @tanstack/react-query，query-core 已在 node_modules，无需安装）
+npm install @tanstack/query-core
+```
+
+SDK 的 `@tanstack/query-core` 为 **optional peerDependency**——npm 不会自动安装，仅在使用缓存功能时需要。
+
+### 使用
+
+```tsx
+// React 示例（Vue 消费端用 @tanstack/vue-query，接入方式相同）
+import { useQuery } from "@tanstack/react-query";
+import { Tkwf } from "@tkwf/tsclient";
+import { createRpcQueryKey, createRpcQueryFn, enableRpcCache } from "@tkwf/tsclient/cache";
+import type { QueryClient } from "@tanstack/query-core";
+
+// 应用入口调用一次（每次调用创建独立 QueryClient，勿在组件内调用）
+const cache = await enableRpcCache<QueryClient>();
+const client = cache.getQueryClient();
+
+// 共享同一组 variables，防止 key/fn 分叉导致缓存 miss
+const variables = { page: 1 };
+const queryFn = createRpcQueryFn({
+  scenario: "default", field: "getOrders", type: "query",
+  variables, selection: "id,name",
+  transport: Tkwf.User.getTransport(),
+  getSessionKey: () => Tkwf.User.sessionKey,
+});
+const queryKey = createRpcQueryKey("default", Tkwf.User.sessionKey, "getOrders", variables, "id,name");
+
+const { data, isPending } = useQuery({ queryKey, queryFn, queryClient: client });
+```
+
+### 会话清理
+
+缓存 key 采用**会话分桶** `[scenario, sessionKey, field, variables, selection]`——不同登录会话数据天然隔离。
+
+> ⚠️ **`logout()` 不会自动清缓存** —— 必须在登出流程中显式调用 `clearSession`，否则旧会话缓存残留：
+
+```typescript
+// 登出流程
+await Tkwf.User.logout();
+cache.clearSession("default", oldSessionKey);  // 先 cancel 再 remove，防 in-flight 竞态
+```
+
+### Vite 配置
+
+Vite dev 模式对可选依赖的动态 import 可能报 `Failed to resolve import`，需在 `vite.config.ts` 排除预构建：
+
+```typescript
+export default defineConfig({
+  optimizeDeps: { exclude: ["@tanstack/query-core"] },
+});
+```
+
+### 重试协调
+
+SDK 的 transport 层已有重试（见上节），缓存层默认 `retry: false`（**单一重试归属**）——transport 重试失败后，TanStack 不再二次重试。如消费端需由 TanStack 接管重试，请将 transport 配置为不重试（`retryOn: []` 或 `maxAttempts: 1`），并在 query 配置中显式设置 `retry`。
+
+### 事件语义
+
+v1.0.8 的 RPC 事件（GraphQL `extensions.tkwf.events` / REST `X-TKWF-Events`）在**真实请求后**由 transport 派发；缓存命中不产生真实请求，因此**不重放事件**——符合"事件是已发生的一次性领域信号"语义。带事件的响应 data 会被正常缓存；如需对带事件响应禁用缓存，在 TanStack 侧配置 `gcTime: 0` / `staleTime: Infinity` + 手动 `invalidateQueries`。
+
+### 依赖缺失
+
+未安装 `@tanstack/query-core` 时调用 `enableRpcCache()` 会抛引导错误：
+
+```
+The "@tanstack/query-core" package is required for the RPC cache. Install it: npm install @tanstack/query-core
+```
+
 ## SSR 支持
 
 - `DomainClientUser` 自动检测 `sessionStorage` 可用性，不可用时使用内存存储
@@ -616,7 +693,7 @@ const host = DomainHostClient.init("my-app", {
 ## 开发
 
 ```bash
-npm test       # 运行测试（167 tests across 9 test files）
+npm test       # 运行测试（302 tests across 15 test files）
 npm run test   # vitest
 ```
 
@@ -642,7 +719,7 @@ DMP-Lite.Merchant.AdminWeb/src/templates/ts-domain-client-examples.ts
 | 拦截器 | 请求/响应日志 / 请求签名 | ✅ |
 | Crypto | PBKDF2 / HMAC / 编码转换 | ✅ |
 | 工具类 | Pager / QueryString | ✅ |
-| React 集成 | 资源释放 / useRpcQuery | — |
+| React 集成 | 资源释放 / RpcCache（`@tkwf/tsclient/cache` + TanStack） | ✅ |
 
 ## 许可
 
