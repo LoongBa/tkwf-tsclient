@@ -169,6 +169,103 @@ describe("ServiceProxy", () => {
     });
   });
 
+  describe("variableTypesMap", () => {
+    it("passes variableTypes when variableTypesMap has the field", async () => {
+      const transport = createMockTransport();
+      const proxy = new ServiceProxy({
+        transport,
+        // rankings_Execute 不匹配前缀启发式，explicitMutations 声明其为 mutation（与真实 schema 一致）
+        explicitMutations: new Set(["rankings_Execute"]),
+        variableTypesMap: { rankings_Execute: { request: "GetRankingsReqDtoInput!" } },
+      });
+      const api = proxy.createUse();
+
+      await api.rankings_Execute?.({ request: { page: 1 } });
+
+      expect(transport.execute).toHaveBeenCalledWith(
+        expect.objectContaining({
+          field: "rankings_Execute",
+          type: "mutation",
+          variableTypes: { request: "GetRankingsReqDtoInput!" },
+        }),
+      );
+    });
+
+    it("omits variableTypes when field not in map", async () => {
+      const transport = createMockTransport();
+      const proxy = new ServiceProxy({
+        transport,
+        variableTypesMap: { otherField: { request: "OtherInput!" } },
+      });
+      const api = proxy.createUse();
+
+      await api.rankings_Execute?.();
+
+      expect(transport.execute).toHaveBeenCalledWith(
+        expect.not.objectContaining({ variableTypes: expect.anything() }),
+      );
+    });
+
+    it("options variableTypes overrides variableTypesMap", async () => {
+      const transport = createMockTransport();
+      const proxy = new ServiceProxy({
+        transport,
+        variableTypesMap: { rankings_Execute: { request: "FromMap!" } },
+      });
+      const api = proxy.createUse();
+
+      await api.rankings_Execute?.(
+        { request: { page: 1 } },
+        { variableTypes: { request: "OverrideInput!" } },
+      );
+
+      expect(transport.execute).toHaveBeenCalledWith(
+        expect.objectContaining({ variableTypes: { request: "OverrideInput!" } }),
+      );
+    });
+
+    it("omits variableTypes when no map configured and no options bag", async () => {
+      const transport = createMockTransport();
+      const proxy = new ServiceProxy({ transport });
+      const api = proxy.createUse();
+
+      await api.rankings_Execute?.({ request: { page: 1 } });
+
+      expect(transport.execute).toHaveBeenCalledWith(
+        expect.not.objectContaining({ variableTypes: expect.anything() }),
+      );
+    });
+
+    it("integration: forwards full operation payload including variableTypes", async () => {
+      const transport = createMockTransport();
+      const proxy = new ServiceProxy({
+        transport,
+        sessionKey: "sk_test",
+        selectionMap: { createRanking: "request { id name }" },
+        variableTypesMap: { createRanking: { request: "CreateRankingInput!" } },
+      });
+      const api = proxy.createUse();
+      const ac = new AbortController();
+
+      await api.createRanking?.(
+        { request: { id: 1, name: "x" } },
+        { signal: ac.signal },
+      );
+
+      expect(transport.execute).toHaveBeenCalledWith(
+        expect.objectContaining({
+          field: "createRanking",
+          type: "mutation",
+          variables: { request: { id: 1, name: "x" } },
+          selection: "request { id name }",
+          variableTypes: { request: "CreateRankingInput!" },
+          sessionKey: "sk_test",
+          signal: ac.signal,
+        }),
+      );
+    });
+  });
+
   describe("signal forwarding", () => {
     it("forwards signal from options arg", async () => {
       const transport = createMockTransport();

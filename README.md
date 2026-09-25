@@ -269,6 +269,32 @@ const newUser = await api.createUser({ name: "Alice", email: "alice@test.com" })
 | `lock*`, `unlock*`, `reset*` | mutation |
 | 其他 | query |
 
+**GraphQL 变量类型声明（`variableTypesMap`，V1.0.10）：**
+
+Use<T>() 调用带复杂 DTO 入参（对象/列表）的命名操作时，SDK 无法自动推断其 GraphQL 输入类型（`inferGraphQLType` 对 object 只能退回 `JSON`），后端 HotChocolate 会报 400（`The variable ... is not compatible with the type of the current location`）。需通过 `variableTypesMap` 显式声明每个操作的变量类型，配置同 `selectionMap`——由 codegen 生成（消费端 g.ts 生成器调用 `buildVariableTypesMap(parsed)` 产 `operationVariableTypes`），逐级透传到 ServiceProxy：
+
+```typescript
+Tkwf.configure("default", {
+  endpoint: "/graphql",
+  // selectionMap 同源生成（codegen）：{ field: { varName: "GraphQLType!" } }
+  variableTypesMap: {
+    rankings_Execute: { request: "GetRankingsReqDtoInput!" },
+    // ...
+  },
+});
+```
+
+亦可在调用点以 `args[1]` options 覆盖（与 `signal`/`selection` 同模式）：
+
+```typescript
+await api.rankings_Execute(
+  { request: { page: 1 } },
+  { variableTypes: { request: "GetRankingsReqDtoInput!" } },  // 逐调用覆盖（codegen 默认已足够，非预期用法）
+);
+```
+
+未配置时行为与旧版完全一致（object 入参推断为 `JSON`）。
+
 ### 从存储恢复会话（`GetUser`）
 
 ```typescript
@@ -478,6 +504,7 @@ interface Transport {
     field: string;          // 操作名称（GraphQL field 或 REST URL 路径段）
     type: "query" | "mutation";
     variables?: Record<string, unknown>;
+    variableTypes?: Record<string, string>;  // GraphQL 变量类型声明（V4.9.26，复杂 DTO 入参必须）
     sessionKey?: string;
     signal?: AbortSignal;
     selection?: string;     // GraphQL 子字段选择（仅 GraphQLTransport 使用）
@@ -504,6 +531,7 @@ interface Transport {
 
 - 自动构建 GraphQL 文档（变量声明、传入、字段选择）
 - 自动推断变量 GraphQL 类型（`String!`, `Int!`, `Float!`, `Boolean!`, `[Type]`, `JSON`）
+- `variableTypes` 覆盖 — 显式声明复杂 DTO/列表入参的 GraphQL 类型（`inferGraphQLType` 对 object 只能推断 `JSON`，需 codegen 生成并经 Use() 的 `variableTypesMap` 透传，见上）
 - 支持 `selection` 子字段选择（HotChocolate 必须）
 - 始终使用 `POST` 方法
 
@@ -519,6 +547,7 @@ interface Transport {
 - `Use()` — thenable Proxy，支持 `await` / `.onSuccess()` / `.onError()`
 - 方法名前缀启发式判断 query/mutation
 - `selectionMap` — 自动附加子字段选择（GraphQL 模式）
+- `variableTypesMap` — 自动透传变量 GraphQL 类型声明（V1.0.10，codegen 同源生成；复杂 DTO 入参必需，见上）
 - `explicitMutations` — 覆盖前缀启发式判断
 
 ### 类型化错误码

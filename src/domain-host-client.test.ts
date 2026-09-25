@@ -175,4 +175,27 @@ describe("DomainHostClient V1.0.8 RPC events (end-to-end dispatch)", () => {
     expect(customTransport.execute).toHaveBeenCalled();
     expect(handler).not.toHaveBeenCalled();
   });
+
+  it("GetGuest() 透传 variableTypesMap 到 Use() 代理（V1.0.10）", async () => {
+    const customTransport: Transport = {
+      execute: vi.fn().mockResolvedValue({ ok: true }),
+      executeRawGraphQL: vi.fn(),
+    };
+
+    const host = DomainHostClient.init("test", {
+      transport: customTransport,
+      variableTypesMap: { rankings_Execute: { request: "GetRankingsReqDtoInput!" } },
+    });
+
+    const guest = host.GetGuest();
+    const api = guest.Use<{ rankings_Execute: (args: unknown) => Promise<unknown> }>();
+    await api.rankings_Execute?.({ request: { id: 1 } });
+
+    expect(customTransport.execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        field: "rankings_Execute",
+        variableTypes: { request: "GetRankingsReqDtoInput!" },
+      }),
+    );
+  });
 });

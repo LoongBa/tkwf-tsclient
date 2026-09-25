@@ -299,6 +299,27 @@ describe("DomainClientUser", () => {
       );
     });
 
+    it("passes variableTypesMap to proxy when configured", async () => {
+      const vtMap = { rankings_Execute: { request: "GetRankingsReqDtoInput!" } };
+      vi.mocked(transport.execute).mockResolvedValue({ ok: true });
+      const user = new DomainClientUser({
+        transport,
+        storage,
+        storageKey: "test",
+        variableTypesMap: vtMap,
+      });
+
+      const api = user.Use<{ rankings_Execute: (args: unknown) => Promise<unknown> }>();
+      await api.rankings_Execute?.({ request: { id: 1 } });
+
+      expect(transport.execute).toHaveBeenCalledWith(
+        expect.objectContaining({
+          field: "rankings_Execute",
+          variableTypes: { request: "GetRankingsReqDtoInput!" },
+        }),
+      );
+    });
+
     it("handles Use() without selectionMap", async () => {
       vi.mocked(transport.execute).mockResolvedValue({ ok: true });
       const user = new DomainClientUser({ transport, storage, storageKey: "test" });

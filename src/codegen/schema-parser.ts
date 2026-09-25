@@ -24,6 +24,8 @@ export interface ParsedArg {
   gqlType: string;
   isNonNull: boolean;
   isList: boolean;
+  /** 列表元素是否非空（`[Int!]` 的 `!`），仅 isList=true 时有效 */
+  listElemNonNull?: boolean;
   defaultValue?: string;
 }
 
@@ -69,9 +71,10 @@ const SCALAR_SET = new Set<string>([
 
 // ── 类型解包辅助 ──
 
-function stripWrapper(t: TypeNode): { namedType: string; isNonNull: boolean; isList: boolean } {
+function stripWrapper(t: TypeNode): { namedType: string; isNonNull: boolean; isList: boolean; listElemNonNull: boolean } {
   let isOuterNonNull = false;
   let isOuterList = false;
+  let listElemNonNull = false;
   let current: TypeNode = t;
 
   // 剥外层非空
@@ -87,6 +90,7 @@ function stripWrapper(t: TypeNode): { namedType: string; isNonNull: boolean; isL
 
     // 列表元素非空：[Type!]
     if (current.kind === "NonNullType") {
+      listElemNonNull = true;
       current = (current as NonNullTypeNode).type;
     }
   }
@@ -95,7 +99,7 @@ function stripWrapper(t: TypeNode): { namedType: string; isNonNull: boolean; isL
     ? (current as NamedTypeNode).name.value
     : extractNamedType(current);
 
-  return { namedType, isNonNull: isOuterNonNull, isList: isOuterList };
+  return { namedType, isNonNull: isOuterNonNull, isList: isOuterList, listElemNonNull };
 }
 
 function extractNamedType(t: TypeNode): string {
@@ -136,7 +140,7 @@ function parseFieldFromInputValue(field: InputValueDefinitionNode): FieldParseRe
 }
 
 function parseArg(arg: InputValueDefinitionNode): ParsedArg {
-  const { namedType, isNonNull, isList } = stripWrapper(arg.type);
+  const { namedType, isNonNull, isList, listElemNonNull } = stripWrapper(arg.type);
   let defaultValue: string | undefined;
   if (arg.defaultValue) {
     switch (arg.defaultValue.kind) {
@@ -160,8 +164,32 @@ function parseArg(arg: InputValueDefinitionNode): ParsedArg {
     gqlType: namedType,
     isNonNull,
     isList,
+    listElemNonNull,
     defaultValue,
   };
+}
+
+function toGraphQLTypeString(arg: ParsedArg): string {
+  if (!arg.isList) return `${arg.gqlType}${arg.isNonNull ? "!" : ""}`;
+  return `[${arg.gqlType}${arg.listElemNonNull ? "!" : ""}]${arg.isNonNull ? "!" : ""}`;
+}
+
+/** 由 ParsedSchema 构建操作→变量→GraphQL 类型映射（供消费端 g.ts 生成器输出 variableTypesMap）。
+ * 精确重建 schema 声明类型（含列表 4 种可空性组合），非空 input 对象如 GetRankingsReqDtoInput!。
+ * Oracle M1 落地：覆盖全部 4 种列表组合（[T!]! / [T]! / [T!] / [T]）。 */
+export function buildVariableTypesMap(
+  parsed: ParsedSchema,
+): Record<string, Record<string, string>> {
+  const out: Record<string, Record<string, string>> = {};
+  for (const op of parsed.operations) {
+    if (op.args.length === 0) continue;
+    const vars: Record<string, string> = {};
+    for (const arg of op.args) {
+      vars[arg.name] = toGraphQLTypeString(arg);
+    }
+    out[op.name] = vars;
+  }
+  return out;
 }
 
 // ── 类型定义解析 ──

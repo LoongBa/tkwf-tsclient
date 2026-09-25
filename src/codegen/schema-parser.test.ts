@@ -1,7 +1,7 @@
 // V1.0.6: schema-parser 单元测试
 
 import { describe, it, expect } from "vitest";
-import { parseGraphQLSchema } from "./schema-parser";
+import { parseGraphQLSchema, buildVariableTypesMap } from "./schema-parser";
 
 describe("parseGraphQLSchema", () => {
   // 1. 基础解析
@@ -159,5 +159,71 @@ describe("parseGraphQLSchema", () => {
     expect(inputType).toBeDefined();
     expect(inputType!.kind).toBe("input");
     expect(inputType!.fields).toHaveLength(2);
+  });
+});
+
+describe("buildVariableTypesMap", () => {
+  // 1. 完整 schema：非空 input 对象 + 4 种列表可空性组合（M6 全覆盖）
+  it("构建操作→变量→GraphQL 类型映射（含 4 种列表组合）", async () => {
+    const schema = `
+      type Query {
+        rankings_Execute(request: GetRankingsReqDtoInput!): RankingsResult!
+      }
+      type Mutation {
+        batch(ids: [Int!]!, codes: [String], flags: [Boolean!], names: [String]!): Boolean
+      }
+      input GetRankingsReqDtoInput {
+        id: ID!
+      }
+      type RankingsResult { id: ID! }
+    `;
+    const parsed = await parseGraphQLSchema(schema);
+    const map = buildVariableTypesMap(parsed);
+    expect(map).toEqual({
+      rankings_Execute: { request: "GetRankingsReqDtoInput!" },
+      batch: {
+        ids: "[Int!]!",
+        codes: "[String]",
+        flags: "[Boolean!]",
+        names: "[String]!",
+      },
+    });
+  });
+
+  // 2. 无参数操作跳过
+  it("无参数操作不出现在返回对象中", async () => {
+    const schema = `
+      type Query {
+        ping: Boolean!
+      }
+    `;
+    const parsed = await parseGraphQLSchema(schema);
+    expect(buildVariableTypesMap(parsed)).toEqual({});
+  });
+
+  // 3. 可空标量参数
+  it("可空标量参数不加感叹号", async () => {
+    const schema = `
+      type Query {
+        list(page: Int): [String]
+      }
+    `;
+    const parsed = await parseGraphQLSchema(schema);
+    const map = buildVariableTypesMap(parsed);
+    expect(map.list).toEqual({ page: "Int" });
+  });
+
+  // 4. listElemNonNull 解析（M7）
+  it("解析列表元素非空标志 listElemNonNull", async () => {
+    const schema = `
+      type Query {
+        a(ids: [Int!]): Boolean
+        b(codes: [Int]): Boolean
+      }
+    `;
+    const parsed = await parseGraphQLSchema(schema);
+    const [a, b] = parsed.operations;
+    expect(a.args[0].listElemNonNull).toBe(true);
+    expect(b.args[0].listElemNonNull).toBe(false);
   });
 });

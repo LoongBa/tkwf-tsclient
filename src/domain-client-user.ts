@@ -46,6 +46,11 @@ export interface DomainClientUserOptions {
    */
   selectionMap?: Record<string, string>;
   /**
+   * Map of GraphQL field names to per-variable GraphQL type declarations.
+   * Passed through to ServiceProxy for Use() variable type declarations.
+   */
+  variableTypesMap?: Record<string, Record<string, string>>;
+  /**
    * V4.5: 默认使用安全登录（Challenge-Response）。
    * true:  loginAs() 内部自动走 loginSecure()
    * false: loginAs() 走原有 loginByPassword()（明文过 SSL）
@@ -59,6 +64,7 @@ export class DomainClientUser {
   private storage: Storage;
   private storageKey: string;
   private selectionMap?: Record<string, string>;
+  private variableTypesMap?: Record<string, Record<string, string>>;
   private _useSecureLogin: boolean;
 
   sessionKey: string | null = null;
@@ -89,6 +95,7 @@ export class DomainClientUser {
         : createMemoryStorage());
     this.storageKey = options.storageKey;
     this.selectionMap = options.selectionMap;
+    this.variableTypesMap = options.variableTypesMap;
     this._useSecureLogin = options.useSecureLogin ?? true;
   }
 
@@ -456,6 +463,7 @@ export class DomainClientUser {
       userErrorHandler: (err) => this.handleError(err),
       explicitMutations: EXPLICIT_MUTATIONS,
       selectionMap: this.selectionMap,
+      variableTypesMap: this.variableTypesMap,
     });
     return proxy.createUse() as unknown as TService;
   }
