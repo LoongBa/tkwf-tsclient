@@ -1,7 +1,7 @@
 // V1.0.6: schema-parser 单元测试
 
 import { describe, it, expect } from "vitest";
-import { parseGraphQLSchema, buildVariableTypesMap } from "./schema-parser";
+import { parseGraphQLSchema, buildVariableTypesMap, buildOperationKinds } from "./schema-parser";
 
 describe("parseGraphQLSchema", () => {
   // 1. 基础解析
@@ -225,5 +225,62 @@ describe("buildVariableTypesMap", () => {
     const [a, b] = parsed.operations;
     expect(a.args[0].listElemNonNull).toBe(true);
     expect(b.args[0].listElemNonNull).toBe(false);
+  });
+});
+
+describe("buildOperationKinds", () => {
+  // V1.0.11（G16 根治）：操作→类型单映射（M9）
+  it("构建操作→类型单映射（query/mutation 全字段，含 *_Execute query 字段）", async () => {
+    const schema = `
+      type Query {
+        removeBuddy_Execute(input: RemoveBuddyInput!): Boolean!
+        createTask_Execute(input: CreateTaskInput!): Boolean!
+        getUser(id: ID!): UserDto
+      }
+      type Mutation {
+        loginByPassword(userName: String!, password: String!): LoginPayload!
+        logout(broadcast: Boolean): Boolean!
+      }
+      type UserDto { id: ID! }
+      type LoginPayload { success: Boolean! }
+      input RemoveBuddyInput { buddyId: ID! }
+      input CreateTaskInput { name: String! }
+    `;
+    const parsed = await parseGraphQLSchema(schema);
+    const kinds = buildOperationKinds(parsed);
+    // 服务端 SG 把 *_Execute 判为 Query 根（非 mutation）——映射忠实反映 schema 权威判定
+    expect(kinds).toEqual({
+      removeBuddy_Execute: "query",
+      createTask_Execute: "query",
+      getUser: "query",
+      loginByPassword: "mutation",
+      logout: "mutation",
+    });
+  });
+
+  it("无 Query/Mutation 操作时返回空对象", async () => {
+    const schema = `
+      scalar JSON
+      directive @cost(weight: String) on FIELD_DEFINITION
+    `;
+    const parsed = await parseGraphQLSchema(schema);
+    expect(buildOperationKinds(parsed)).toEqual({});
+  });
+
+  it("query 与 mutation 同名不冲突（各自根类型归属）", async () => {
+    const schema = `
+      type Query {
+        status: String!
+      }
+      type Mutation {
+        createOrder(input: CreateOrderInput!): Boolean!
+      }
+      input CreateOrderInput { id: ID! }
+    `;
+    const parsed = await parseGraphQLSchema(schema);
+    expect(buildOperationKinds(parsed)).toEqual({
+      status: "query",
+      createOrder: "mutation",
+    });
   });
 });

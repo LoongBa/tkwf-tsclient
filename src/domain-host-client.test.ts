@@ -198,4 +198,63 @@ describe("DomainHostClient V1.0.8 RPC events (end-to-end dispatch)", () => {
       }),
     );
   });
+
+  // V1.0.11（G16 根治）：GetGuest/GetUser 两条路径透传 operationKinds（v1.0.10 M4 先例对齐）
+  it("GetGuest() 透传 operationKinds 到 Use() 代理（V1.0.11：Execute 字段判 query）", async () => {
+    const customTransport: Transport = {
+      execute: vi.fn().mockResolvedValue({ ok: true }),
+      executeRawGraphQL: vi.fn(),
+    };
+
+    const host = DomainHostClient.init("test", {
+      transport: customTransport,
+      operationKinds: { createTask_Execute: "query" },
+    });
+
+    const guest = host.GetGuest();
+    const api = guest.Use<{ createTask_Execute: (args: unknown) => Promise<unknown> }>();
+    await api.createTask_Execute?.({ name: "x" });
+
+    expect(customTransport.execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        field: "createTask_Execute",
+        type: "query",
+      }),
+    );
+  });
+
+  it("GetUser() 透传 operationKinds 到 Use() 代理（V1.0.11：Execute 字段判 query）", async () => {
+    const customTransport: Transport = {
+      execute: vi.fn().mockResolvedValue({ ok: true }),
+      executeRawGraphQL: vi.fn(),
+    };
+    // GetUser() 需从 storage 恢复会话
+    const store = new Map<string, string>();
+    store.set("test", JSON.stringify({ sessionKey: "sk_abc" }));
+    const memoryStorage: Storage = {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => { store.set(key, value); },
+      removeItem: (key: string) => { store.delete(key); },
+      clear: () => store.clear(),
+      get length() { return store.size; },
+      key: (index: number) => [...store.keys()][index] ?? null,
+    };
+
+    const host = DomainHostClient.init("test", {
+      transport: customTransport,
+      storage: memoryStorage,
+      operationKinds: { createStudySession_Execute: "query" },
+    });
+
+    const user = host.GetUser();
+    const api = user.Use<{ createStudySession_Execute: (args: unknown) => Promise<unknown> }>();
+    await api.createStudySession_Execute?.({ id: 1 });
+
+    expect(customTransport.execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        field: "createStudySession_Execute",
+        type: "query",
+      }),
+    );
+  });
 });

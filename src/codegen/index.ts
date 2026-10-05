@@ -1,6 +1,6 @@
 // V1.0.6: codegen 模块入口
 
-export { parseGraphQLSchema, buildVariableTypesMap } from "./schema-parser";
+export { parseGraphQLSchema, buildVariableTypesMap, buildOperationKinds } from "./schema-parser";
 export type {
   ParsedSchema, ParsedOperation, ParsedArg,
   ParsedType, ParsedField, GraphQLScalar,

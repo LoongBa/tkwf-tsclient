@@ -9,6 +9,50 @@ function createMockTransport(): Transport {
 }
 
 describe("ServiceProxy", () => {
+  // V1.0.11（G16 根治）：废弃前缀启发式单次告警（M5）。置于文件最前，保证 module 级
+  // heuristicWarned flag 在 suppress 用例验证时尚未触发（vitest 每文件独立模块实例）。
+  describe("heuristic deprecation warning (V1.0.11)", () => {
+    it("suppressHeuristicWarning: true → 无告警（判定结果不变）", async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const transport = createMockTransport();
+        const proxy = new ServiceProxy({ transport, suppressHeuristicWarning: true });
+        const api = proxy.createUse();
+
+        // removeUser 命中前缀启发式 → mutation（判定不受 suppress 影响）
+        await api.removeUser?.({ id: 1 });
+
+        expect(transport.execute).toHaveBeenCalledWith(
+          expect.objectContaining({ field: "removeUser", type: "mutation" }),
+        );
+        expect(warnSpy).not.toHaveBeenCalled();
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("未配置 operationKinds 且字段落启发式 → console.warn 恰好一次（module 级去重）", async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const transport = createMockTransport();
+        const proxy = new ServiceProxy({ transport });
+        const api = proxy.createUse();
+
+        // 第一次启发式命中 → 告警
+        await api.createUser?.({ name: "test" });
+        // 第二次仍落启发式 → 去重不再告警
+        await api.updateProfile?.({ name: "test" });
+
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining("operationKinds"),
+        );
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+  });
+
   describe("isMutation detection", () => {
     it("classifies create* methods as mutation", async () => {
       const transport = createMockTransport();
@@ -131,6 +175,109 @@ describe("ServiceProxy", () => {
       expect(transport.execute).toHaveBeenCalledWith(
         expect.objectContaining({ field: "getUser", type: "query" }),
       );
+    });
+  });
+
+  // V1.0.11（G16 根治）：operationKinds 权威映射（M1/M2/M4/M3 integration）
+  describe("operationKinds (V1.0.11 G16 根治)", () => {
+    it("operationKinds query 命中 → type query（G16 复刻：Execute 字段不再 400）", async () => {
+      const transport = createMockTransport();
+      const proxy = new ServiceProxy({
+        transport,
+        operationKinds: {
+          removeBuddy_Execute: "query",
+          createTask_Execute: "query",
+          createStudySession_Execute: "query",
+          updateTask_Execute: "query",
+        },
+      });
+      const api = proxy.createUse();
+
+      await api.removeBuddy_Execute?.({ buddyId: 1 });
+      await api.createTask_Execute?.({ name: "x" });
+      await api.createStudySession_Execute?.({ id: 1 });
+      await api.updateTask_Execute?.({ id: 1 });
+
+      // 前缀启发式会把 remove*/create*/update* 判为 mutation → 现在权威映射判定恒 query
+      expect(transport.execute).toHaveBeenNthCalledWith(1,
+        expect.objectContaining({ field: "removeBuddy_Execute", type: "query" }));
+      expect(transport.execute).toHaveBeenNthCalledWith(2,
+        expect.objectContaining({ field: "createTask_Execute", type: "query" }));
+      expect(transport.execute).toHaveBeenNthCalledWith(3,
+        expect.objectContaining({ field: "createStudySession_Execute", type: "query" }));
+      expect(transport.execute).toHaveBeenNthCalledWith(4,
+        expect.objectContaining({ field: "updateTask_Execute", type: "query" }));
+    });
+
+    it("operationKinds mutation 命中 → type mutation（权威映射反向验证）", async () => {
+      const transport = createMockTransport();
+      const proxy = new ServiceProxy({
+        transport,
+        operationKinds: {
+          loginByPassword: "mutation",
+          logout: "mutation",
+        },
+      });
+      const api = proxy.createUse();
+
+      await api.loginByPassword?.({ userName: "admin", password: "s" });
+      await api.logout?.();
+
+      expect(transport.execute).toHaveBeenNthCalledWith(1,
+        expect.objectContaining({ field: "loginByPassword", type: "mutation" }));
+      expect(transport.execute).toHaveBeenNthCalledWith(2,
+        expect.objectContaining({ field: "logout", type: "mutation" }));
+    });
+
+    it("operationKinds 未命中 → explicitMutations 兜底（内置登录仍 mutation）", async () => {
+      const transport = createMockTransport();
+      const proxy = new ServiceProxy({
+        transport,
+        // loginByPassword 不在 operationKinds → 落到 explicitMutations
+        operationKinds: { someQuery: "query" },
+        explicitMutations: new Set(["loginByPassword"]),
+      });
+      const api = proxy.createUse();
+
+      await api.loginByPassword?.({ userName: "admin", password: "s" });
+
+      expect(transport.execute).toHaveBeenCalledWith(
+        expect.objectContaining({ field: "loginByPassword", type: "mutation" }),
+      );
+    });
+
+    it("operationKinds 未命中且非 explicitMutations → 前缀启发式兜底（非前缀 query 字段）", async () => {
+      const transport = createMockTransport();
+      const proxy = new ServiceProxy({
+        transport,
+        operationKinds: { createTask_Execute: "query" }, // 未覆盖 getUser
+      });
+      const api = proxy.createUse();
+
+      // getUser 不在 operationKinds / explicitMutations → 启发式 → 非前缀 → query
+      await api.getUser?.({ id: 1 });
+
+      expect(transport.execute).toHaveBeenCalledWith(
+        expect.objectContaining({ field: "getUser", type: "query" }),
+      );
+    });
+
+    it("integration: operationKinds 经 createUse → transport 捕获 execute({type}) 断言 type === 'query'", async () => {
+      const transport = createMockTransport();
+      const proxy = new ServiceProxy({
+        transport,
+        operationKinds: { createTask_Execute: "query" },
+      });
+      const api = proxy.createUse();
+
+      await api.createTask_Execute?.({ name: "x" });
+
+      expect(transport.execute).toHaveBeenCalledWith(
+        expect.objectContaining({ field: "createTask_Execute", type: "query" }),
+      );
+      // 直接断言 transport 捕获的 execute 参数 type（HTTP 体不再 mutation { ... }）
+      const call = vi.mocked(transport.execute).mock.calls[0]?.[0];
+      expect(call?.type).toBe("query");
     });
   });
 

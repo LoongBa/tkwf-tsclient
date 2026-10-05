@@ -70,6 +70,15 @@ export interface DomainHostClientOptions {
    */
   variableTypesMap?: Record<string, Record<string, string>>;
   /**
+   * Map of GraphQL field names to their authoritative operation kind ('query' | 'mutation').
+   * V1.0.11（G16 根治）：codegen 产物（消费端 ts-client.g.ts `operationKinds`，由 schema 根类型
+   * 权威判定生成，见 schema-parser.buildOperationKinds）。判定优先级最高——命中即直接决定操作类型，
+   * 不再走前缀启发式。GetUser()/GetGuest() 构造 DomainClientUser 时透传，与 selectionMap/variableTypesMap 同源同代。
+   */
+  operationKinds?: Readonly<Record<string, "query" | "mutation">>;
+  /** V1.0.11：关闭废弃前缀启发式的单次告警（透传 DomainClientUser → ServiceProxy）。 */
+  suppressHeuristicWarning?: boolean;
+  /**
    * V4.5: 默认使用安全登录（Challenge-Response）。
    * true:  loginAs() 内部自动走 loginSecure()
    * false: loginAs() 走原有 loginByPassword()（明文过 SSL）
@@ -95,6 +104,8 @@ export class DomainHostClient {
   private retry?: DomainHostClientOptions["retry"];
   private selectionMap?: Record<string, string>;
   private variableTypesMap?: Record<string, Record<string, string>>;
+  private operationKinds?: Readonly<Record<string, "query" | "mutation">>;
+  private suppressHeuristicWarning?: boolean;
   private useSecureLogin: boolean;
   private injectedTransport?: Transport;
   private signHandler?: SignHandler;
@@ -127,6 +138,8 @@ export class DomainHostClient {
     this.retry = options?.retry;
     this.selectionMap = options?.selectionMap;
     this.variableTypesMap = options?.variableTypesMap;
+    this.operationKinds = options?.operationKinds;
+    this.suppressHeuristicWarning = options?.suppressHeuristicWarning;
     this.useSecureLogin = options?.useSecureLogin ?? true;
     this.injectedTransport = options?.transport;
     this.isBrowser =
@@ -209,6 +222,8 @@ export class DomainHostClient {
       storageKey: this.storageKey,
       selectionMap: this.selectionMap,
       variableTypesMap: this.variableTypesMap,
+      operationKinds: this.operationKinds,
+      suppressHeuristicWarning: this.suppressHeuristicWarning,
       useSecureLogin: this.useSecureLogin,
     });
 
@@ -237,6 +252,8 @@ export class DomainHostClient {
       storageKey: this.storageKey,
       selectionMap: this.selectionMap,
       variableTypesMap: this.variableTypesMap,
+      operationKinds: this.operationKinds,
+      suppressHeuristicWarning: this.suppressHeuristicWarning,
       useSecureLogin: this.useSecureLogin,
     });
     // V4.8.7: 注册全局错误处理器

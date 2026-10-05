@@ -51,6 +51,19 @@ export interface DomainClientUserOptions {
    */
   variableTypesMap?: Record<string, Record<string, string>>;
   /**
+   * Map of GraphQL field names to their authoritative operation kind ('query' | 'mutation').
+   * V1.0.11（G16 根治）：codegen 产物（消费端 ts-client.g.ts `operationKinds`，由 schema 根类型
+   * 权威判定生成，见 schema-parser.buildOperationKinds）。判定优先级最高——命中即直接决定操作类型，
+   * 不再走前缀启发式。与 selectionMap/variableTypesMap 同源同代。
+   */
+  operationKinds?: Readonly<Record<string, "query" | "mutation">>;
+  /** Mutation field names that don't match the prefix heuristic (e.g. "ping", "logout").
+   *  V1.0.11 起为向后兼容兜底：Use() 构造 ServiceProxy 时与内置 EXPLICIT_MUTATIONS 合并
+   *  （new Set([...EXPLICIT_MUTATIONS, ...this.explicitMutations])），仅影响未接线 operationKinds 的路径。 */
+  explicitMutations?: ReadonlySet<string>;
+  /** V1.0.11：关闭废弃前缀启发式的单次告警（透传 ServiceProxy）。 */
+  suppressHeuristicWarning?: boolean;
+  /**
    * V4.5: 默认使用安全登录（Challenge-Response）。
    * true:  loginAs() 内部自动走 loginSecure()
    * false: loginAs() 走原有 loginByPassword()（明文过 SSL）
@@ -65,6 +78,9 @@ export class DomainClientUser {
   private storageKey: string;
   private selectionMap?: Record<string, string>;
   private variableTypesMap?: Record<string, Record<string, string>>;
+  private operationKinds?: Readonly<Record<string, "query" | "mutation">>;
+  private explicitMutations?: ReadonlySet<string>;
+  private suppressHeuristicWarning?: boolean;
   private _useSecureLogin: boolean;
 
   sessionKey: string | null = null;
@@ -96,6 +112,9 @@ export class DomainClientUser {
     this.storageKey = options.storageKey;
     this.selectionMap = options.selectionMap;
     this.variableTypesMap = options.variableTypesMap;
+    this.operationKinds = options.operationKinds;
+    this.explicitMutations = options.explicitMutations;
+    this.suppressHeuristicWarning = options.suppressHeuristicWarning;
     this._useSecureLogin = options.useSecureLogin ?? true;
   }
 
@@ -343,7 +362,7 @@ export class DomainClientUser {
     try {
       const result = await this.transport.execute<{ ping: PingResult }>({
         field: "ping",
-        type: "mutation", // ping 在 EXPLICIT_MUTATIONS 中，属 mutation 类
+        type: "mutation", // V1.0.11（Oracle S4）特例：ping 硬编码 mutation 直调 transport，不经 ServiceProxy.isMutation——operationKinds 不改变此路径；须与 schema Mutation 权威保持一致
         sessionKey: this.sessionKey ?? undefined,
         selection: "success isAuthenticated userName sessionKey",
       });
@@ -461,7 +480,13 @@ export class DomainClientUser {
         ? (err) => this._globalErrorHandlers.forEach(h => { try { h(err); } catch { /* best-effort */ } })
         : undefined,
       userErrorHandler: (err) => this.handleError(err),
-      explicitMutations: EXPLICIT_MUTATIONS,
+      // V1.0.11（G16 根治）：operationKinds（主权威）透传；explicitMutations 合并内置登录
+      // （未接线兜底——undefined 时用 EXPLICIT_MUTATIONS 原引用零拷贝；配置时取并集）
+      operationKinds: this.operationKinds,
+      explicitMutations: this.explicitMutations
+        ? new Set([...EXPLICIT_MUTATIONS, ...this.explicitMutations])
+        : EXPLICIT_MUTATIONS,
+      suppressHeuristicWarning: this.suppressHeuristicWarning,
       selectionMap: this.selectionMap,
       variableTypesMap: this.variableTypesMap,
     });

@@ -192,6 +192,18 @@ export function buildVariableTypesMap(
   return out;
 }
 
+/** 由 ParsedSchema 构建操作→类型单映射（供消费端生成器输出 operationKinds）。
+ *  数据源为 schema 根类型权威判定（ParsedOperation.kind，Query/Mutation 根类型提取）。
+ *  V1.0.11（G16 根治）：SDK 运行时纯读取该映射判定操作类型，不再走前缀启发式。
+ *  对称于 buildVariableTypesMap（v1.0.10）。 */
+export function buildOperationKinds(
+  parsed: ParsedSchema,
+): Record<string, "query" | "mutation"> {
+  const out: Record<string, "query" | "mutation"> = {};
+  for (const op of parsed.operations) out[op.name] = op.kind;
+  return out;
+}
+
 // ── 类型定义解析 ──
 
 function parseObjectType(def: ObjectTypeDefinitionNode): ParsedType {

@@ -355,5 +355,67 @@ describe("DomainClientUser", () => {
         expect.objectContaining({ field: "getUsers", type: "query" }),
       );
     });
+
+    // V1.0.11（G16 根治）：operationKinds 透传 + explicitMutations 合并语义（M7）
+    it("passes operationKinds to proxy when configured（Execute 字段按权威映射判 query）", async () => {
+      vi.mocked(transport.execute).mockResolvedValue({ ok: true });
+      const user = new DomainClientUser({
+        transport,
+        storage,
+        storageKey: "test",
+        operationKinds: { removeBuddy_Execute: "query" },
+      });
+
+      const api = user.Use<{ removeBuddy_Execute: (args: unknown) => Promise<unknown> }>();
+      await api.removeBuddy_Execute?.({ buddyId: 1 });
+
+      expect(transport.execute).toHaveBeenCalledWith(
+        expect.objectContaining({
+          field: "removeBuddy_Execute",
+          type: "query",
+        }),
+      );
+    });
+
+    it("explicitMutations 合并语义：消费端配置 ∪ 内置 EXPLICIT_MUTATIONS（并集兜底）", async () => {
+      vi.mocked(transport.execute).mockResolvedValue({ ok: true });
+      const user = new DomainClientUser({
+        transport,
+        storage,
+        storageKey: "test",
+        explicitMutations: new Set(["myCustomOp"]),
+      });
+
+      const api = user.Use<{
+        myCustomOp: (args: unknown) => Promise<unknown>;
+        loginByPassword: (args: unknown) => Promise<unknown>;
+      }>();
+      // 消费端配置字段（非前缀）→ mutation（经合并）
+      await api.myCustomOp?.({});
+      // 内置登录字段（operationKinds 未配置）→ 仍 mutation（EXPLICIT_MUTATIONS ∪ 消费端）
+      await api.loginByPassword?.({ userName: "admin", password: "s" });
+
+      expect(transport.execute).toHaveBeenNthCalledWith(1,
+        expect.objectContaining({ field: "myCustomOp", type: "mutation" }));
+      expect(transport.execute).toHaveBeenNthCalledWith(2,
+        expect.objectContaining({ field: "loginByPassword", type: "mutation" }));
+    });
+
+    it("suppressHeuristicWarning 透传到 ServiceProxy（配置可接受，不改变判定）", async () => {
+      vi.mocked(transport.execute).mockResolvedValue({ ok: true });
+      const user = new DomainClientUser({
+        transport,
+        storage,
+        storageKey: "test",
+        suppressHeuristicWarning: true,
+      });
+
+      const api = user.Use<{ createUser: (args: unknown) => Promise<unknown> }>();
+      await api.createUser?.({ name: "test" });
+
+      expect(transport.execute).toHaveBeenCalledWith(
+        expect.objectContaining({ field: "createUser", type: "mutation" }),
+      );
+    });
   });
 });

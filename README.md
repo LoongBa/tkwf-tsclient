@@ -263,11 +263,35 @@ const newUser = await api.createUser({ name: "Alice", email: "alice@test.com" })
 
 **方法名 → 操作类型映射规则：**
 
+> ⚠️ **V1.0.11（G16 根治）起：该前缀启发式映射已废弃（deprecated）**——SDK 判定已被权威 `operationKinds` 映射取代。仅作为未接线 operationKinds 的向后兼容兜底保留，命中时触发单次 `console.warn` 告警（可经 `suppressHeuristicWarning: true` 静默）。
+
 | 前缀 | 操作类型 |
 |------|----------|
 | `create*`, `update*`, `delete*`, `add*`, `remove*` | mutation |
 | `lock*`, `unlock*`, `reset*` | mutation |
 | 其他 | query |
+
+**权威操作类型映射（`operationKinds`，V1.0.11 G16 根治）：**
+
+服务端 SG 把 `Xxx_ExecuteAsync` 判为**非 mutation**（Query 根），而前缀启发式会把 `remove*/create*` 误判为 mutation → 发送 `mutation { removeBuddy_Execute }` → HTTP 400。根治方式：codegen **在生成期**从 schema 根类型权威产出 `operationKinds` 单映射（`{ field: 'query' | 'mutation' }`），SDK 运行时**纯读取零猜测**——判定顺序：`operationKinds` 命中 → `explicitMutations` 兜底 → 前缀启发式（废弃）。
+
+```typescript
+import { operationKinds, operationSelection, operationVariableTypes } from "./ts-client.g";
+
+Tkwf.configure("default", {
+  endpoint: "/graphql",
+  operationKinds,                            // ← V1.0.11：权威操作类型映射（codegen 产物）
+  selectionMap: operationSelection,          // 既有同源配置
+  variableTypesMap: operationVariableTypes,  // 既有同源配置（V1.0.10）
+});
+```
+
+`operationKinds` 由消费端生成器产出，两条路径：
+
+- **路径 1（推荐）**：生成器使用 SDK `schema-parser` 的 `buildOperationKinds(parsed)` 纯函数（与 `buildVariableTypesMap` 对称，同源同代）。
+- **路径 2（自研生成器）**：`gen-ts-client.ts` 已从 schema 权威提取 `queryFields`/`mutationFields`（带 `type`）——追加 `export const operationKinds` 从两者合并派生（约 5 行）。
+
+未升级生成器/未配置 `operationKinds` 的消费端完全不受影响（判定行为与旧版一致，仅新增单次废弃告警信号）。
 
 **GraphQL 变量类型声明（`variableTypesMap`，V1.0.10）：**
 
@@ -466,7 +490,8 @@ const result = await transport.uploadFile<{ url: string }>(
 ┌──────────────────────▼───────────────────────────┐
 │                    ServiceProxy                    │  ← 动态代理
 │   createUse()                                     │
-│   方法名 → query/mutation 自动映射                │
+│   方法名 → query/mutation 自动映射                  │
+│   （operationKinds 权威判定，V1.0.11）             │
 └──────────────────────┬───────────────────────────┘
                        │
 ┌──────────────────────▼───────────────────────────┐
@@ -545,10 +570,12 @@ interface Transport {
 ### 动态代理（ServiceProxy）
 
 - `Use()` — thenable Proxy，支持 `await` / `.onSuccess()` / `.onError()`
-- 方法名前缀启发式判断 query/mutation
+- `operationKinds` — **V1.0.11（G16 根治）**：操作→类型权威映射（codegen 产物，schema 根类型权威判定），判定优先级最高——命中即直接决定 query/mutation，不再走前缀启发式（根治 HTTP 400）
+- 方法名前缀启发式判断 query/mutation（**V1.0.11 起废弃**，仅未接线 operationKinds 的向后兼容兜底；命中触发单次告警）
 - `selectionMap` — 自动附加子字段选择（GraphQL 模式）
 - `variableTypesMap` — 自动透传变量 GraphQL 类型声明（V1.0.10，codegen 同源生成；复杂 DTO 入参必需，见上）
-- `explicitMutations` — 覆盖前缀启发式判断
+- `explicitMutations` — 覆盖前缀启发式判断（V1.0.11 起为 operationKinds 之后的兜底）
+- `suppressHeuristicWarning` — V1.0.11：关闭废弃前缀启发式单次告警（生产环境可静默）
 
 ### 类型化错误码
 
@@ -722,7 +749,7 @@ The "@tanstack/query-core" package is required for the RPC cache. Install it: np
 ## 开发
 
 ```bash
-npm test       # 运行测试（302 tests across 15 test files）
+npm test       # 运行测试（331 tests across 15 test files）
 npm run test   # vitest
 ```
 
