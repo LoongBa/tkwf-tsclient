@@ -28,6 +28,46 @@ export type ParsedResult<T extends QueryStringSchema> = {
         : string | null;
 };
 
+/**
+ * V1.0.12: OAuth 回调解析预设（RFC 6749 §4.1.2）——供 `QueryString.parse(OAUTH_CALLBACK_FIELDS, url)` 使用。
+ * 覆盖标准字段：code / state / error / error_description。
+ * 定位为 QueryString 预设配置而非独立解析函数（S3：不新增 query string 解析双源）。
+ */
+export const OAUTH_CALLBACK_FIELDS = {
+  code: { type: String },
+  state: { type: String },
+  error: { type: String },
+  error_description: { type: String },
+} as const satisfies QueryStringSchema;
+
+/** V1.0.12: OAuth 回调解析结果。 */
+export interface OAuthCallbackResult {
+  code?: string;
+  state?: string;
+  error?: string;
+  errorDescription?: string;
+}
+
+/**
+ * V1.0.12: 解析 OAuth 回调 URL（location.search / 显式 URL）→ { code?, state?, error?, errorDescription? }。
+ * 内部委托 QueryString.parse(OAUTH_CALLBACK_FIELDS)（S3：复用既有解析器，无独立解析逻辑）；
+ * 纯工具（无副作用、不导航、不持久化）——导航/跳转编排归消费端（P5）。
+ *
+ * @example
+ * resolveOAuthCallback("https://app.tld/cb?code=abc&state=csrf-xyz")
+ * // → { code: "abc", state: "csrf-xyz" }
+ */
+export function resolveOAuthCallback(url: string): OAuthCallbackResult {
+  const search = url.includes("?") ? url.slice(url.indexOf("?")) : "";
+  const parsed = QueryString.parse(OAUTH_CALLBACK_FIELDS, search) as Record<string, string | null>;
+  return {
+    ...(parsed.code ? { code: parsed.code } : {}),
+    ...(parsed.state ? { state: parsed.state } : {}),
+    ...(parsed.error ? { error: parsed.error } : {}),
+    ...(parsed.error_description ? { errorDescription: parsed.error_description } : {}),
+  };
+}
+
 export class QueryString {
   /**
    * Parse current URL query string into typed variables.

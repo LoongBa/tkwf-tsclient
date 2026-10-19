@@ -11,7 +11,11 @@ export type ErrorCode =
   | "TIMEOUT"
   | "CANCELLED"
   | "RATE_LIMITED"
-  | "UNKNOWN";
+  | "UNKNOWN"
+  // V1.0.12: 外部 IdP 登录（JWT 会话）客户端码 —— 与既有客户端独有码同位（非生成物）
+  | "INVALID_ARGUMENT"
+  | "EXTERNAL_LOGIN_FAILED"
+  | "JWT_SESSION_INVALID";
 
 /** Base error class for all RPC errors */
 export class DomainClientError extends Error {
@@ -53,6 +57,17 @@ export function toErrorCode(
       } catch { /* ignore parse errors */ }
     }
     return "AUTH_EXPIRED";
+  }
+  // V1.0.12: 外部 IdP 登录——服务端 REST 响应 body 显式携带 errorCode 时透传
+  // （400 INVALID_ARGUMENT 缺 code / channelType 无效；refresh 4xx JWT_SESSION_INVALID——M7 分层）。
+  // 仅当 body 明确给出 errorCode 才提前返回；无 body / body 无数码时**回落既有路径**
+  // （GraphQL extensions.code → UNKNOWN），不破坏 400 + extensions.code 的既有映射行为。
+  if (status === 400 && responseBody) {
+    try {
+      const body = JSON.parse(responseBody);
+      if (body.errorCode === "INVALID_ARGUMENT") return "INVALID_ARGUMENT";
+      if (body.errorCode === "JWT_SESSION_INVALID") return "JWT_SESSION_INVALID";
+    } catch { /* ignore parse errors */ }
   }
   if (status === 403) return "FORBIDDEN";
   if (status === 409) return "CONFLICT";

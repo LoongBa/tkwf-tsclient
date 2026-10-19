@@ -61,6 +61,8 @@ export type GlobalErrorHandler = (error: DomainClientError) => void;
 export interface ServiceProxyOptions {
   transport: Transport;
   sessionKey?: string | null;
+  /** V1.0.12: 外部 IdP（JWT）会话 Bearer 凭据——Use<T>() 调用透传给 Transport（M6）。 */
+  bearerToken?: string | null;
   globalErrorHandler?: GlobalErrorHandler;
   /** V4.8.7: 用户级错误处理回调，由 DomainClientUser.handleError 提供。 */
   userErrorHandler?: (error: DomainClientError) => void;
@@ -93,6 +95,7 @@ export interface ServiceProxyOptions {
 export class ServiceProxy {
   private transport: Transport;
   private sessionKey?: string | null;
+  private bearerToken?: string | null;  // V1.0.12
   private globalErrorHandler?: GlobalErrorHandler;
   private userErrorHandler?: (error: DomainClientError) => void;
   private selectionMap?: Record<string, string>;
@@ -104,6 +107,7 @@ export class ServiceProxy {
   constructor(options: ServiceProxyOptions) {
     this.transport = options.transport;
     this.sessionKey = options.sessionKey;
+    this.bearerToken = options.bearerToken;
     this.globalErrorHandler = options.globalErrorHandler;
     this.userErrorHandler = options.userErrorHandler;
     this.selectionMap = options.selectionMap;
@@ -148,6 +152,7 @@ export class ServiceProxy {
                     variableTypes,
                     selection: sel,
                     sessionKey: this.sessionKey ?? undefined,
+                    bearerToken: this.bearerToken ?? undefined,  // V1.0.12: JWT 会话 Bearer 透传（M6）
                     signal: options?.signal,
                   })
                   .then((result) => {

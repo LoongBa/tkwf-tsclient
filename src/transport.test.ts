@@ -560,4 +560,48 @@ describe("GraphQLTransport", () => {
       expect(res.events).toBeUndefined();
     });
   });
+
+  describe("V1.0.12 JWT session bearer token", () => {
+    it("execute carries bearerToken as Authorization (independent forms; sessionKey-only is zero-regression)", async () => {
+      // 形态 1：仅 bearerToken → Authorization: Bearer，无 X-Session-Key
+      const fetchMock = mockFetch({ data: { me: "ok" } });
+      const transport1 = new GraphQLTransport({ url: "/graphql" });
+
+      await transport1.execute({
+        field: "me",
+        type: "query",
+        sessionKey: undefined,
+        bearerToken: "tk",
+      });
+
+      let headers = (fetchMock.mock.calls[0][1] as Record<string, unknown>).headers as Record<string, string>;
+      expect(headers["Authorization"]).toBe("Bearer tk");
+      expect(headers["X-Session-Key"]).toBeUndefined();
+
+      // 形态 2：仅 sessionKey（无 bearerToken）→ 仍只发 X-Session-Key，不带 Authorization（零回归）
+      mockFetch({ data: { me: "ok" } });
+      const transport2 = new GraphQLTransport({ url: "/graphql" });
+
+      await transport2.execute({
+        field: "me",
+        type: "query",
+        sessionKey: "sk_test",
+        bearerToken: undefined,
+      });
+
+      headers = (fetchMock.mock.calls[1][1] as Record<string, unknown>).headers as Record<string, string>;
+      expect(headers["X-Session-Key"]).toBe("sk_test");
+      expect(headers["Authorization"]).toBeUndefined();
+    });
+
+    it("executeRawGraphQL 第 4 尾参 bearerToken 注入 Authorization 头", async () => {
+      const fetchMock = mockFetch({ data: { me: "ok" } });
+      const transport = new GraphQLTransport({ url: "/graphql" });
+
+      await transport.executeRawGraphQL("{ me }", undefined, undefined, "tk");
+
+      const headers = (fetchMock.mock.calls[0][1] as Record<string, unknown>).headers as Record<string, string>;
+      expect(headers["Authorization"]).toBe("Bearer tk");
+    });
+  });
 });

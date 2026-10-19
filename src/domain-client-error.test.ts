@@ -160,4 +160,25 @@ describe("toErrorCode", () => {
       expect(toErrorCode(200, graphqlErrors)).toBe("TIMEOUT");
     });
   });
+
+  describe("V1.0.12 外部 IdP（400 + responseBody errorCode 提前返回）", () => {
+    it("400 + body errorCode INVALID_ARGUMENT → INVALID_ARGUMENT", () => {
+      expect(toErrorCode(400, undefined, '{"errorCode":"INVALID_ARGUMENT"}')).toBe("INVALID_ARGUMENT");
+    });
+
+    it("400 + body errorCode JWT_SESSION_INVALID → JWT_SESSION_INVALID", () => {
+      expect(toErrorCode(400, undefined, '{"errorCode":"JWT_SESSION_INVALID"}')).toBe("JWT_SESSION_INVALID");
+    });
+
+    it("回落：400 无 body → 既有路径（无 graphqlErrors → UNKNOWN）", () => {
+      expect(toErrorCode(400)).toBe("UNKNOWN");
+    });
+
+    it("回落：400 无 body errorCode 但 graphqlErrors 有 extensions.code → 既有 GraphQL 映射仍生效", () => {
+      const graphqlErrors = [
+        { message: "resource not found", extensions: { code: "NOT_FOUND" } },
+      ];
+      expect(toErrorCode(400, graphqlErrors)).toBe("NOT_FOUND");
+    });
+  });
 });

@@ -61,6 +61,10 @@ login() → 服务端返回 sessionKey → 自动持久化到 storage → 页面
 | `localStorage` | 关闭浏览器后 session 仍保留 | 需要保持登录状态 |
 | **自定义 Storage** | 实现 `{ getItem, setItem, removeItem }` | 从 cookie 读取、加密存储等 |
 
+> **JWT 外部 IdP 会话（v1.0.12+）**：默认建议 `sessionStorage`。外部 IdP 登录产生
+> access（2h）+ refresh（30d rotation）JWT 对；若用 `localStorage` 持久化，需自行评估 XSS
+> 暴露风险——**Bearer 凭据被窃取即 30 天有效**，与可单点吊销的 sessionKey 根本不同（见"外部 IdP 登录"）。
+
 **自定义 Storage 示例**（从 cookie 读写 sessionKey）：
 
 ```typescript
@@ -244,6 +248,68 @@ const ctxPayload = await guest.loginByContext("admin", "credential", {
   deviceId: "device-xxx",
 });
 ```
+
+### 外部 IdP 登录（V1.0.12）
+
+对接认证中心（`TKWF.Ext.AuthCenter`）`POST {prefix}/login/external/{channelType}` 端点族，
+支持微信静默认证（snsapi_base）/ 事件取 OpenId（ticket）等外部身份提供方登录。外部 IdP 登录
+产物是 **JWT 会话**（与服务端 `TokenResponse` wire 契约 1:1 映射：`accessToken`/`refreshToken`/
+`tokenType`/`expiresIn`，camelCase），与 GraphQL 登录的 `sessionKey` 会话**独立并存、互不隐式转换**
+（两形态至多一个激活；`restore()` 按字段存在性识别）。
+
+```typescript
+import { Tkwf, RestTransport, resolveOAuthCallback } from "@tkwf/tsclient";
+
+// ① 解析微信 OAuth 回调（redirectUri?code=...&state=...）——纯工具，导航编排归消费端
+const cb = resolveOAuthCallback(window.location.href);   // { code?, state?, error?, errorDescription? }
+
+// ② 外部 IdP 登录（Guest 语义）——成功即落 JWT 会话并持久化
+const guest = Tkwf.Guest;
+const session = await guest.loginByExternal("wechat_oauth", {
+  code: cb.code!,          // 平台协议字段原样透传（code / channel_id / state / ticket…）
+  channel_id: "wx-xxx",
+  state: cb.state,
+});
+// session = { accessToken, refreshToken, tokenType, expiresIn }（严格 4 字段）
+
+// ③ 会话恢复：Tkwf.User 内部识别 JWT 会话 → 请求自动携带 Authorization: Bearer
+// ④ 显式续期（P5 显式，不做自动隐式 refresh）
+try {
+  await Tkwf.User.refreshJwt();              // 成功 → 更新会话持久化
+} catch (err) {
+  // JWT_SESSION_INVALID → refresh 已失效，需重新登录；AUTH_EXPIRED → access 过期可续
+}
+```
+
+**通道配置（GraphQL 主传输下）**：`loginByExternal`/`refreshJwt` 走 REST 通道。REST 主传输
+（`transportType: "rest"`）自动可用；GraphQL 主传输下需注入专用 REST 通道：
+
+```typescript
+Tkwf.configure("default", {
+  endpoint: "/graphql",
+  transportType: "graphql",
+  // 外部 IdP 登录专用 REST 通道（认证中心基址 + 路径映射；URL 唯一解析源 = urlMap）
+  externalLoginTransport: new RestTransport({
+    url: "http://auth-center:5000",              // 认证中心 base
+    pathPrefix: "/api/auth",                     // AuthCenter RoutePrefix 默认
+    // 默认路径：loginByExternal=/api/auth/login/external/{channelType}，refreshToken=/api/auth/refresh
+    // 消费方按实际 RoutePrefix 覆盖：
+    urlMap: {
+      loginByExternal: "/api/auth/login/external/{channelType}",
+      refreshToken: "/api/auth/refresh",
+    },
+  }),
+});
+```
+
+> ⚠️ **Federation RoutePrefix 拼写**：微信授权发起（authorize）与 OAuth 回调属 Federation 扩展，
+> RoutePrefix 默认 **`/feberation`**（服务端既有拼写，非 `/federation`）：`POST /feberation/authorize/start`
+> 返回 `{ authorize_url, state }`（snake_case 匿名对象）供消费端 302 跳转；回调为
+> `GET /feberation/{platformId}/oauth[/{channelId}]/callback`（302 回跳）。本 SDK 不封装 authorize
+> 发起（P2 服务端权威；归消费端/未来迭代）。
+>
+> ⚠️ **错误语义分层**：access 过期（401）→ `AUTH_EXPIRED`（refresh 可能仍有效，可调 `refreshJwt()`
+> 续期）；refresh 失效（4xx）→ `JWT_SESSION_INVALID`（需重新登录，SDK 已清会话）。
 
 ### 使用 `Use()` 调用 API（推荐）
 
@@ -593,6 +659,9 @@ interface Transport {
 | `SERVER_ERROR` | 500+ | — | 服务端错误（可重试） |
 | `CANCELLED` | — | — | 请求被取消 |
 | `UNKNOWN` | — | — | 未分类错误 |
+| `INVALID_ARGUMENT`（V1.0.12） | 400 | — | 外部 IdP 登录参数校验失败（channelType 空/缺 code，前置守卫或服务端透传） |
+| `EXTERNAL_LOGIN_FAILED`（V1.0.12） | — | — | 外部 IdP 登录传输失败（无 REST 通道/网络失败） |
+| `JWT_SESSION_INVALID`（V1.0.12） | 400 | — | JWT 会话无效（响应缺 accessToken / refresh 失效需重登） |
 
 ---
 
@@ -749,7 +818,7 @@ The "@tanstack/query-core" package is required for the RPC cache. Install it: np
 ## 开发
 
 ```bash
-npm test       # 运行测试（331 tests across 15 test files）
+npm test       # 运行测试（379 tests across 15 test files）
 npm run test   # vitest
 ```
 

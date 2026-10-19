@@ -55,12 +55,52 @@ export interface Transport {
     /** V4.9.26: 显式变量 GraphQL 类型声明。覆盖 inferGraphQLType 的自动推断（后者对 complex object 只能返回 JSON）。 */
     variableTypes?: Record<string, string>;
     sessionKey?: string;
+    /** V1.0.12: 外部 IdP（JWT）会话的 Bearer 凭据——携带 Authorization: Bearer <bearerToken>。 */
+    bearerToken?: string;
     signal?: AbortSignal;
     selection?: string;
   }): Promise<T>;
 
   /** V4.9.20: 执行原始 GraphQL 查询字符串（QueryBuilder 使用）。 */
-  executeRawGraphQL<T>(query: string, sessionKey?: string, signal?: AbortSignal): Promise<T>;
+  executeRawGraphQL<T>(
+    query: string,
+    sessionKey?: string,
+    signal?: AbortSignal,
+    /** V1.0.12: 尾参追加（源兼容）——JWT 会话 Bearer 凭据。 */
+    bearerToken?: string,
+  ): Promise<T>;
+
+  // ── V1.0.12: 外部 IdP 登录能力（P3 能力即注册，null 即不支持）──
+  /**
+   * V1.0.12: 外部 IdP 登录——对接认证中心 `POST {base}{urlMap["loginByExternal"]}`
+   *（默认 `/api/auth/login/external/{channelType}`）。仅 RestTransport 实现；
+   * GraphQLTransport 不注册（null = 不支持，调用方守卫抛 EXTERNAL_LOGIN_FAILED）。
+   */
+  loginByExternal?(input: {
+    channelType: string;
+    parameters: Record<string, string>;
+    signal?: AbortSignal;
+  }): Promise<ExternalLoginResult>;
+
+  /** V1.0.12: 外部 IdP 会话续期——`POST {base}{urlMap["refreshToken"] ?? "/api/auth/refresh"}`，
+   *  body `{ refreshToken }`（camelCase 显式契约）。仅 RestTransport 实现。 */
+  refreshToken?(input: {
+    refreshToken: string;
+    signal?: AbortSignal;
+  }): Promise<ExternalLoginResult>;
+}
+
+/**
+ * V1.0.12: 外部 IdP 登录结果——与服务端 AuthCenter `TokenResponse` wire 契约 1:1 映射（P2 下游纯消费）。
+ * 服务端 wire 为 camelCase（record 无 [JsonPropertyName]，Results.Ok 默认 camelCase）：
+ * `accessToken` / `refreshToken` / `tokenType` / `expiresIn`。严格 4 字段（不含 userName/displayName——
+ * 服务端无此二字段，JWT claims 亦无显示名；消费方按需另调 profile API，N2）。
+ */
+export interface ExternalLoginResult {
+  accessToken: string;
+  refreshToken: string;
+  tokenType: string;   // "Bearer"
+  expiresIn: number;   // 秒（服务端 ExpiresIn int）
 }
 
 /**
@@ -80,10 +120,11 @@ export class GraphQLTransport extends BaseHttpTransport {
     variables?: Record<string, unknown>;
     variableTypes?: Record<string, string>;
     sessionKey?: string;
+    bearerToken?: string;
     signal?: AbortSignal;
     selection?: string;
   }): Promise<T> {
-    const { field, type, variables, variableTypes, sessionKey, signal, selection } = operation;
+    const { field, type, variables, variableTypes, sessionKey, bearerToken, signal, selection } = operation;
 
     // Build GraphQL document
     const varNames = variables ? Object.keys(variables) : [];
@@ -104,6 +145,8 @@ export class GraphQLTransport extends BaseHttpTransport {
       "Content-Type": "application/json",
     };
     if (sessionKey) headers["X-Session-Key"] = sessionKey;
+    // V1.0.12: JWT 会话 Bearer 携带（与 X-Session-Key 并列，两形态互斥由 DomainClientUser 保证）
+    if (bearerToken) headers["Authorization"] = `Bearer ${bearerToken}`;
 
     const timestamp = new Date().toISOString();
     const ctx: RequestContext = { field, type, variables, variableTypes, signal, timestamp };
@@ -144,9 +187,15 @@ export class GraphQLTransport extends BaseHttpTransport {
 
   // V4.9.20: 执行原始 GraphQL 查询字符串（QueryBuilder 使用）。
   // 复用 BaseHttpTransport 的签名/拦截器/重试链路。
-  async executeRawGraphQL<T>(query: string, sessionKey?: string, signal?: AbortSignal): Promise<T> {
+  async executeRawGraphQL<T>(
+    query: string,
+    sessionKey?: string,
+    signal?: AbortSignal,
+    bearerToken?: string,  // V1.0.12: 尾参追加（源兼容），JWT 会话 Bearer 凭据
+  ): Promise<T> {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (sessionKey) headers["X-Session-Key"] = sessionKey;
+    if (bearerToken) headers["Authorization"] = `Bearer ${bearerToken}`;  // V1.0.12
     const timestamp = new Date().toISOString();
     const ctx: RequestContext = { field: "raw", type: "query", timestamp, signal };
     return this.executeHttp<T>(

@@ -1,8 +1,18 @@
 import { DomainClientError } from "./domain-client-error";
 import { BaseHttpTransport } from "./base-http-transport";
-import type { RequestContext, TransportOptions, ResponseContext } from "./transport";
+import type { RequestContext, TransportOptions, ResponseContext, ExternalLoginResult } from "./transport";
 import { parseRpcEventEnvelope, base64UrlDecode, type RpcEventData } from "./event";
 import { QueryString } from "./query-string";
+
+/**
+ * 默认外部 IdP 登录端点 path（V1.0.12）——对齐认证中心 AuthCenter RoutePrefix 默认 `/api/auth`
+ * （`AuthCenterEndpointOptions.RoutePrefix`，探索实证）。消费方可经 `urlMap["loginByExternal"]` 覆盖。
+ * 支持 `{channelType}` 模板参数（urlMap 模板扩展，仅 loginByExternal 使用）。
+ */
+const DEFAULT_EXTERNAL_LOGIN_PATH = "/api/auth/login/external/{channelType}";
+
+/** 默认 refresh 端点 path（V1.0.12）——AuthCenter `POST {prefix}/refresh`。 */
+const DEFAULT_REFRESH_PATH = "/api/auth/refresh";
 
 export interface RestTransportOptions extends TransportOptions {
   /**
@@ -98,10 +108,11 @@ export class RestTransport extends BaseHttpTransport {
     type: "query" | "mutation";
     variables?: Record<string, unknown>;
     sessionKey?: string;
+    bearerToken?: string;  // V1.0.12
     signal?: AbortSignal;
     selection?: string;
   }): Promise<T> {
-    const { field, type, variables, sessionKey, signal, selection } = operation;
+    const { field, type, variables, sessionKey, bearerToken, signal, selection } = operation;
 
     // Resolve URL path
     const urlPath = this.urlMap?.[field] ?? `${this.pathPrefix}/${field}`;
@@ -115,6 +126,8 @@ export class RestTransport extends BaseHttpTransport {
     // Headers
     const headers: Record<string, string> = {};
     if (sessionKey) headers["X-Session-Key"] = sessionKey;
+    // V1.0.12: JWT 会话 Bearer 携带
+    if (bearerToken) headers["Authorization"] = `Bearer ${bearerToken}`;
     // POST 始终需要 Content-Type；GET + body 也需要
     if (method !== "GET" || getWithBody) headers["Content-Type"] = "application/json";
 
@@ -148,8 +161,128 @@ export class RestTransport extends BaseHttpTransport {
   }
 
   // V4.9.20: QueryBuilder 是 GraphQL 专属能力，REST 模式不支持。
-  async executeRawGraphQL<T>(_query: string, _sessionKey?: string, _signal?: AbortSignal): Promise<T> {
+  async executeRawGraphQL<T>(
+    _query: string,
+    _sessionKey?: string,
+    _signal?: AbortSignal,
+    _bearerToken?: string,  // V1.0.12: 签名一致性（REST 不支持，恒抛）
+  ): Promise<T> {
     throw new Error("QueryBuilder is GraphQL-only; REST transport does not support executeRawGraphQL.");
+  }
+
+  // ── V1.0.12: 外部 IdP 登录能力（P3 能力即注册——仅 RestTransport 实现；GraphQLTransport 不注册）──
+
+  /**
+   * V1.0.12: 外部 IdP 登录——对接认证中心 `POST {base}{path}/login/external/{channelType}`。
+   *
+   * - path 解析 = URL 单一事实源 urlMap：`urlMap["loginByExternal"] ?? DEFAULT_EXTERNAL_LOGIN_PATH`
+   * - `{channelType}` 模板参数经 `encodeURIComponent` 注入 path（S2，防特殊字符路径错配）
+   * - body = 参数原样透传（含 code/channel_id/state/ticket 等平台协议字段，无客户端枚举）
+   * - 成功 → `ExternalLoginResult`（camelCase wire 1:1 映射）；响应缺 accessToken → `JWT_SESSION_INVALID`
+   * - 沿用 BaseHttpTransport 生命周期（onRequest/signHandler/retry/onResponse/事件）
+   */
+  async loginByExternal(input: {
+    channelType: string;
+    parameters: Record<string, string>;
+    signal?: AbortSignal;
+  }): Promise<ExternalLoginResult> {
+    if (!input.channelType || !input.channelType.trim()) {
+      // 守卫硬失败（前置校验，不送服务端）
+      throw new DomainClientError(
+        "External login failed: channelType must be a non-empty string.",
+        "INVALID_ARGUMENT",
+      );
+    }
+    if (!input.parameters.code && !input.parameters.ticket) {
+      throw new DomainClientError(
+        "External login failed: 'code' (or 'ticket' for the ticket channel) parameter is required.",
+        "INVALID_ARGUMENT",
+      );
+    }
+
+    const rawPath = this.urlMap?.["loginByExternal"] ?? DEFAULT_EXTERNAL_LOGIN_PATH;
+    const path = rawPath.replace(/\{channelType\}/g, encodeURIComponent(input.channelType.trim()));
+    const url = `${this.options.url}${path}`;
+
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const timestamp = new Date().toISOString();
+    const ctx: RequestContext = {
+      field: "loginByExternal",
+      type: "mutation",
+      variables: input.parameters,
+      signal: input.signal,
+      timestamp,
+    };
+
+    return this.executeHttp<ExternalLoginResult>(
+      { url, method: "POST", headers, body: JSON.stringify(input.parameters) },
+      ctx,
+    );
+  }
+
+  /**
+   * V1.0.12: 外部 IdP 会话续期——`POST {base}{urlMap["refreshToken"] ?? "/api/auth/refresh"}`。
+   *
+   * - body = `JSON.stringify({ refreshToken })`（camelCase 显式契约——服务端 RefreshRequest 无
+   *   [JsonPropertyName]，wire key 为 `refreshToken`，非 `refresh_token`）
+   * - 4xx（refresh token 失效/被撤销）→ 抛 `JWT_SESSION_INVALID`（M7 错误分层：与 access 401 AUTH_EXPIRED 可区分；
+   *   调用方据此决定 re-prompt 而非自动跳转）
+   * - 网络失败（NETWORK_ERROR）→ 保留 externalSession（access 仍可用至过期）——S4 语义由调用方分层
+   */
+  async refreshToken(input: {
+    refreshToken: string;
+    signal?: AbortSignal;
+  }): Promise<ExternalLoginResult> {
+    if (!input.refreshToken) {
+      throw new DomainClientError(
+        "External session refresh failed: refreshToken is required.",
+        "INVALID_ARGUMENT",
+      );
+    }
+
+    const path = this.urlMap?.["refreshToken"] ?? DEFAULT_REFRESH_PATH;
+    const url = `${this.options.url}${path}`;
+
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const timestamp = new Date().toISOString();
+    const ctx: RequestContext = {
+      field: "refreshToken",
+      type: "mutation",
+      variables: { refreshToken: input.refreshToken },
+      signal: input.signal,
+      timestamp,
+    };
+
+    try {
+      return await this.executeHttp<ExternalLoginResult>(
+        {
+          url,
+          method: "POST",
+          headers,
+          body: JSON.stringify({ refreshToken: input.refreshToken }),
+        },
+        ctx,
+      );
+    } catch (err) {
+      // M7/S4 错误分层（Oracle 代码审核 M4）：仅把**明确的 refresh 业务失败**归一为 JWT_SESSION_INVALID——
+      // refresh token 失效/被撤销（服务端 4xx 且 body 命中 INVALID_ARGUMENT / JWT_SESSION_INVALID / AUTH_EXPIRED）。
+      // 不归一：NETWORK_ERROR/CANCELLED/TIMEOUT（网络瞬态，保留会话由调用方决策）+
+      // SERVER_ERROR/RATE_LIMITED（5xx/429 是服务端瞬态故障——归一为 JWT_SESSION_INVALID 会让调用方
+      // （一旦 M1 修复）清会话强制重登，违反 P7 不可逆状态变更原则）。
+      if (
+        err instanceof DomainClientError &&
+        (err.code === "JWT_SESSION_INVALID" ||
+          err.code === "INVALID_ARGUMENT" ||
+          err.code === "AUTH_EXPIRED")
+      ) {
+        throw new DomainClientError(
+          "External session expired — refresh token is invalid or revoked. Please re-authenticate.",
+          "JWT_SESSION_INVALID",
+          err,
+        );
+      }
+      throw err;
+    }
   }
 
   /**
@@ -207,6 +340,7 @@ export class RestTransport extends BaseHttpTransport {
     extraFields?: Record<string, string>,
     sessionKey?: string,
     signal?: AbortSignal,
+    bearerToken?: string,  // V1.0.12: 尾参追加（源兼容）；JWT 会话 Bearer 凭据
   ): Promise<T> {
     const urlPath = this.urlMap?.[field] ?? `${this.pathPrefix}/${field}`;
     const url = `${this.options.url}${urlPath}`;
@@ -221,6 +355,7 @@ export class RestTransport extends BaseHttpTransport {
 
     const headers: Record<string, string> = {};
     if (sessionKey) headers["X-Session-Key"] = sessionKey;
+    if (bearerToken) headers["Authorization"] = `Bearer ${bearerToken}`;  // V1.0.12
 
     const timestamp = new Date().toISOString();
     const ctx: RequestContext = { field, type: "mutation", timestamp, signal };

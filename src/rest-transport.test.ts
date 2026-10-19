@@ -472,4 +472,140 @@ describe("RestTransport", () => {
       expect(received?.events).toEqual([event]);
     });
   });
+
+  describe("V1.0.12 external IdP login (JWT session)", () => {
+    const loginResult = {
+      accessToken: "at-123",
+      refreshToken: "rt-456",
+      tokenType: "Bearer",
+      expiresIn: 3600,
+    };
+
+    it("loginByExternal success: default path + POST + parameters body + 1:1 result", async () => {
+      const fetchMock = mockFetch(loginResult);
+      const transport = new RestTransport({ url: "http://localhost:5000" });
+
+      const result = await transport.loginByExternal({
+        channelType: "wechat",
+        parameters: { code: "abc123", state: "xyz" },
+      });
+
+      const call = fetchMock.mock.calls[0];
+      expect(call[0]).toBe("http://localhost:5000/api/auth/login/external/wechat");
+      expect(call[1]?.method).toBe("POST");
+      const body = JSON.parse((call[1] as Record<string, unknown>).body as string);
+      expect(body).toEqual({ code: "abc123", state: "xyz" });
+      expect(result).toEqual(loginResult);
+    });
+
+    it("loginByExternal: {channelType} template replaced via encodeURIComponent", async () => {
+      const fetchMock = mockFetch(loginResult);
+      const transport = new RestTransport({ url: "http://localhost:5000" });
+
+      await transport.loginByExternal({
+        channelType: "wechat oauth/x",
+        parameters: { code: "abc123" },
+      });
+
+      const url = fetchMock.mock.calls[0][0] as string;
+      expect(url).toBe("http://localhost:5000/api/auth/login/external/wechat%20oauth%2Fx");
+      expect(url).toContain("wechat%20oauth%2Fx");
+    });
+
+    it("loginByExternal guards: empty/whitespace channelType or missing code → INVALID_ARGUMENT, fetch not called", async () => {
+      const transport = new RestTransport({ url: "http://localhost:5000" });
+
+      await expect(
+        transport.loginByExternal({ channelType: "", parameters: { code: "abc" } }),
+      ).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+      await expect(
+        transport.loginByExternal({ channelType: "   ", parameters: { code: "abc" } }),
+      ).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+      await expect(
+        transport.loginByExternal({ channelType: "wechat", parameters: {} }),
+      ).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+
+      expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it("refreshToken success: POST default path + camelCase refreshToken body + 1:1 result", async () => {
+      const fetchMock = mockFetch(loginResult);
+      const transport = new RestTransport({ url: "http://localhost:5000" });
+
+      const result = await transport.refreshToken({ refreshToken: "rt-456" });
+
+      const call = fetchMock.mock.calls[0];
+      expect(call[0]).toBe("http://localhost:5000/api/auth/refresh");
+      expect(call[1]?.method).toBe("POST");
+      const body = JSON.parse((call[1] as Record<string, unknown>).body as string);
+      expect(body).toEqual({ refreshToken: "rt-456" });
+      expect(result).toEqual(loginResult);
+    });
+
+    it("loginByExternal ticket 通道正路径：参数带 ticket（无 code）→ 守卫通过（Oracle M2）", async () => {
+      const fetchMock = mockFetch(loginResult);
+      const transport = new RestTransport({ url: "http://localhost:5000" });
+
+      const result = await transport.loginByExternal({
+        channelType: "ticket",
+        parameters: { ticket: "t-1", channel_id: "wx" },
+      });
+
+      const call = fetchMock.mock.calls[0];
+      expect(call[0]).toBe("http://localhost:5000/api/auth/login/external/ticket");
+      expect(JSON.parse((call[1] as Record<string, unknown>).body as string)).toEqual({
+        ticket: "t-1",
+        channel_id: "wx",
+      });
+      expect(result).toEqual(loginResult);
+    });
+
+    it("refreshToken 500 → SERVER_ERROR 透传（不归一为 JWT_SESSION_INVALID——Oracle M4 瞬态保留会话）", async () => {
+      const fetchMock = mockFetch({ message: "boom" }, 500);
+      // 禁用重试（SERVER_ERROR 默认可重试；此处验证单一 500 归一层，避免重试命中空 mock fallback）
+      const transport = new RestTransport({
+        url: "http://localhost:5000",
+        retry: { maxAttempts: 1, baseDelaySeconds: 0, maxDelaySeconds: 0, jitter: false, retryOn: [] },
+      });
+
+      await expect(
+        transport.refreshToken({ refreshToken: "rt-456" }),
+      ).rejects.toMatchObject({ code: "SERVER_ERROR" });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("Bearer 注入：execute 携带 bearerToken → Authorization 头存在（S1）", async () => {
+      const fetchMock = mockFetch({ items: [] });
+      const transport = new RestTransport({ url: "http://localhost:5000" });
+
+      await transport.execute({
+        field: "users",
+        type: "query",
+        sessionKey: undefined,
+        bearerToken: "tk-bearer",
+      });
+
+      const headers = (fetchMock.mock.calls[0][1] as Record<string, unknown>).headers as Record<string, string>;
+      expect(headers["Authorization"]).toBe("Bearer tk-bearer");
+      expect(headers["X-Session-Key"]).toBeUndefined();
+    });
+
+    it("Bearer 注入：uploadFile 尾参 bearerToken → Authorization 头存在（S1）", async () => {
+      const fetchMock = mockFetch({ uploaded: true });
+      const transport = new RestTransport({ url: "http://localhost:5000" });
+
+      await transport.uploadFile(
+        "merchant/upload",
+        new Blob(["x"], { type: "text/plain" }),
+        "file",
+        undefined,
+        undefined,
+        undefined,
+        "tk-bearer",
+      );
+
+      const headers = (fetchMock.mock.calls[0][1] as Record<string, unknown>).headers as Record<string, string>;
+      expect(headers["Authorization"]).toBe("Bearer tk-bearer");
+    });
+  });
 });

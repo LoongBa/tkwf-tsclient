@@ -96,9 +96,10 @@ export function deriveResolverField(entityName: string): string {
 /**
  * QueryBuilder 工厂类型：根据 transport/field/sessionKey 创建实体专属 QueryBuilder。
  * codegen 生成的 domain-client.g.ts 通过 registerQueryBuilder 注册各实体工厂。
+ * V1.0.12：尾参增可选 bearerToken（JWT 会话透传，M6）——少参工厂仍可赋值（TS 函数型参数逆变），向后兼容。
  */
 export type QueryBuilderFactory<TEntity = any, TFields = any, TOrderBy = any, TSelect = any> =
-  (transport: Transport, field: string, sessionKey?: string) => QueryBuilderBase<TEntity, TFields, TOrderBy, TSelect>;
+  (transport: Transport, field: string, sessionKey?: string, bearerToken?: string) => QueryBuilderBase<TEntity, TFields, TOrderBy, TSelect>;
 
 const queryBuilderRegistry = new Map<string, QueryBuilderFactory>();
 
@@ -121,13 +122,15 @@ export function createQueryBuilder<TEntity = any>(
   transport: Transport,
   sessionKey?: string,
   resolverField?: string,
+  /** V1.0.12: JWT 会话 Bearer 凭据（M6）。 */
+  bearerToken?: string,
 ): QueryBuilderBase<TEntity, any, any, any> {
   const field = resolverField ?? deriveResolverField(entityName);
   const factory = queryBuilderRegistry.get(entityName);
   if (!factory) {
     throw new Error(`No QueryBuilder registered for entity: '${entityName}'. Run codegen first.`);
   }
-  return factory(transport, field, sessionKey) as QueryBuilderBase<TEntity, any, any, any>;
+  return factory(transport, field, sessionKey, bearerToken) as QueryBuilderBase<TEntity, any, any, any>;
 }
 
 /** 重置注册表（仅测试使用）。 */
@@ -232,6 +235,8 @@ export abstract class QueryBuilderBase<
     protected transport: Transport,
     protected resolverField: string,
     protected _sessionKey?: string,
+    /** V1.0.12: JWT 会话 Bearer 凭据（与 sessionKey 同快照点，M6）。 */
+    protected _bearerToken?: string,
   ) {}
 
   // ── 过滤 ──
@@ -334,7 +339,7 @@ export abstract class QueryBuilderBase<
    */
   async countAsync(): Promise<number> {
     const query = this.compileGraphQLCountMode();
-    const raw = await this.transport.executeRawGraphQL<Record<string, { totalCount: number }>>(query, this._sessionKey);
+    const raw = await this.transport.executeRawGraphQL<Record<string, { totalCount: number }>>(query, this._sessionKey, undefined, this._bearerToken);
     const result = raw?.[this.resolverField];
     if (result === undefined) {
       throw new Error(`QueryBuilder: GraphQL response missing resolver field '${this.resolverField}'. Available fields: ${raw ? Object.keys(raw).join(", ") : "none"}.`);
@@ -366,6 +371,7 @@ export abstract class QueryBuilderBase<
     cloned.transport = this.transport;
     cloned.resolverField = this.resolverField;
     cloned._sessionKey = this._sessionKey;
+    cloned._bearerToken = this._bearerToken;  // V1.0.12（Oracle 代码审核 M3）：克隆须继承 JWT 会话 Bearer 凭据
     cloned._filters = this._filters.map(f => ({ ...f }));
     cloned._sorts = this._sorts.map(s => ({ ...s }));
     cloned._fields = [...this._fields];
@@ -426,7 +432,7 @@ export abstract class QueryBuilderBase<
       throw new Error("QueryBuilder: aggregate() must be called before toAggregateAsync().");
     }
     const query = this.compileGraphQLAggregateMode();
-    const raw = await this.transport.executeRawGraphQL<Record<string, AggregateResponse>>(query, this._sessionKey);
+    const raw = await this.transport.executeRawGraphQL<Record<string, AggregateResponse>>(query, this._sessionKey, undefined, this._bearerToken);
     const result = raw?.[`${this.resolverField}_aggregate`];
     if (result === undefined) {
       throw new Error(`QueryBuilder: GraphQL response missing aggregate resolver field '${this.resolverField}_aggregate'. Available fields: ${raw ? Object.keys(raw).join(", ") : "none"}.`);
@@ -444,7 +450,7 @@ export abstract class QueryBuilderBase<
 
   protected async executeAsync<T>(ct?: AbortSignal): Promise<T> {
     const query = this.compileGraphQL();
-    const raw = await this.transport.executeRawGraphQL<Record<string, T>>(query, this._sessionKey, ct);
+    const raw = await this.transport.executeRawGraphQL<Record<string, T>>(query, this._sessionKey, ct, this._bearerToken);
     const result = raw?.[this.resolverField];
     if (result === undefined) {
       throw new Error(`QueryBuilder: GraphQL response missing resolver field '${this.resolverField}'. Available fields: ${raw ? Object.keys(raw).join(", ") : "none"}.`);

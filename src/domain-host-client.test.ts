@@ -258,3 +258,55 @@ describe("DomainHostClient V1.0.8 RPC events (end-to-end dispatch)", () => {
     );
   });
 });
+
+describe("DomainHostClient V1.0.12 externalLoginTransport（外部 IdP 登录通道注入）", () => {
+  it("GetGuest() 透传 externalLoginTransport：loginByExternal 走注入通道而非主 transport", async () => {
+    const graphqlLikeTransport: Transport = {
+      execute: vi.fn().mockResolvedValue({ ok: true }),
+      executeRawGraphQL: vi.fn(),
+    };
+
+    const externalResult = {
+      accessToken: "jwt-access-token",
+      refreshToken: "jwt-refresh-token",
+      tokenType: "Bearer",
+      expiresIn: 3600,
+    };
+    const externalTransport: Transport = {
+      execute: vi.fn(),
+      executeRawGraphQL: vi.fn(),
+      loginByExternal: vi.fn().mockResolvedValue(externalResult),
+      refreshToken: vi.fn().mockResolvedValue(externalResult),
+    };
+
+    const store = new Map<string, string>();
+    const memoryStorage: Storage = {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => { store.set(key, value); },
+      removeItem: (key: string) => { store.delete(key); },
+      clear: () => store.clear(),
+      get length() { return store.size; },
+      key: (index: number) => [...store.keys()][index] ?? null,
+    };
+
+    const host = DomainHostClient.init("test", {
+      transport: graphqlLikeTransport,
+      externalLoginTransport: externalTransport,
+      storage: memoryStorage,
+    });
+
+    const guest = host.GetGuest();
+    const result = await guest.loginByExternal("wechat_oauth", { code: "abc" });
+
+    expect(result).toEqual(externalResult);
+    expect(externalTransport.loginByExternal).toHaveBeenCalledTimes(1);
+    expect(externalTransport.loginByExternal).toHaveBeenCalledWith({
+      channelType: "wechat_oauth",
+      parameters: { code: "abc" },
+      signal: undefined,
+    });
+    // 注入通道优先：主 transport 的 execute / executeRawGraphQL 均不应被调用
+    expect(graphqlLikeTransport.execute).not.toHaveBeenCalled();
+    expect(graphqlLikeTransport.executeRawGraphQL).not.toHaveBeenCalled();
+  });
+});

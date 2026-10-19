@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { QueryString } from "./query-string";
+import { describe, expect, it } from "vitest";
+import { OAUTH_CALLBACK_FIELDS, QueryString, resolveOAuthCallback } from "./query-string";
 
 // ---------------------------------------------------------------------------
 // QueryString.composite
@@ -138,5 +138,54 @@ describe("QueryString.parse", () => {
       "key=value",
     );
     expect(result.key).toBe("value");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// V1.0.12 OAuth 回调解析（OAUTH_CALLBACK_FIELDS 预设 + resolveOAuthCallback）
+// ---------------------------------------------------------------------------
+describe("resolveOAuthCallback", () => {
+  it("正路径：code + state 均解析", () => {
+    expect(resolveOAuthCallback("https://app.tld/cb?code=abc&state=csrf-xyz")).toEqual({
+      code: "abc",
+      state: "csrf-xyz",
+    });
+  });
+
+  it("仅 code → 只返回 code", () => {
+    expect(resolveOAuthCallback("https://app.tld/cb?code=abc")).toEqual({ code: "abc" });
+  });
+
+  it("无参数 → {}", () => {
+    expect(resolveOAuthCallback("https://app.tld/cb")).toEqual({});
+  });
+
+  it("错误分支：error + error_description → error/errorDescription", () => {
+    expect(resolveOAuthCallback("?error=access_denied&error_description=user_canceled")).toEqual({
+      error: "access_denied",
+      errorDescription: "user_canceled",
+    });
+  });
+
+  it("无 code 无 error（仅非预设参数）→ {}", () => {
+    expect(resolveOAuthCallback("https://app.tld/cb?foo=bar")).toEqual({});
+  });
+
+  it("malformed URL（不含 ? / 纯 search 无 ? 前缀）→ 不抛错返回 {}", () => {
+    expect(() => resolveOAuthCallback("https://app.tld/cb")).not.toThrow();
+    expect(() => resolveOAuthCallback("code=abc")).not.toThrow();
+    expect(resolveOAuthCallback("code=abc")).toEqual({});
+  });
+});
+
+describe("OAUTH_CALLBACK_FIELDS 预设", () => {
+  it("可与 QueryString.parse 组合（缺失字段回落 null）", () => {
+    const parsed = QueryString.parse(OAUTH_CALLBACK_FIELDS, "?code=x&error=y");
+    expect(parsed).toEqual({
+      code: "x",
+      state: null,
+      error: "y",
+      error_description: null,
+    });
   });
 });

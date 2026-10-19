@@ -91,6 +91,16 @@ export interface DomainHostClientOptions {
    * 典型值：MockTransport 实例（来自 @tkwf/tsclient-mock）
    */
   transport?: Transport;
+  /**
+   * V1.0.12: 外部 IdP 登录专用 REST 通道（N1 配置规约——GraphQL 主传输下外部登录能力兜底）。
+   * 消费方在 GraphQL 主传输（transportType="graphql"）下如需 `loginByExternal`/`refreshJwt`，
+   * 注入一个 RestTransport 实例（如 `new RestTransport({ url: authCenterBaseUrl, pathPrefix: "/api/auth",
+   * urlMap: { loginByExternal: "/login/external/{channelType}", refreshToken: "/refresh" } })`）。
+   * 优先级：externalLoginTransport > 主 transport 的 loginByExternal?/refreshToken? 能力方法 > 守卫抛
+   * EXTERNAL_LOGIN_FAILED。REST 通道不自动继承主 transport 的 signHandler/retry/onRequest/onResponse
+   * （P5 显式——消费方注入时按需自行配置）。
+   */
+  externalLoginTransport?: Transport;
 }
 
 export class DomainHostClient {
@@ -108,6 +118,7 @@ export class DomainHostClient {
   private suppressHeuristicWarning?: boolean;
   private useSecureLogin: boolean;
   private injectedTransport?: Transport;
+  private externalLoginTransport?: Transport;  // V1.0.12（N1）
   private signHandler?: SignHandler;
   private globalErrorHandler?: GlobalErrorHandler;
   private pongInterval?: number;
@@ -142,6 +153,7 @@ export class DomainHostClient {
     this.suppressHeuristicWarning = options?.suppressHeuristicWarning;
     this.useSecureLogin = options?.useSecureLogin ?? true;
     this.injectedTransport = options?.transport;
+    this.externalLoginTransport = options?.externalLoginTransport;  // V1.0.12（N1）
     this.isBrowser =
       typeof window !== "undefined" && typeof document !== "undefined";
     this.eventBus = new TkwfEventBus();
@@ -225,6 +237,7 @@ export class DomainHostClient {
       operationKinds: this.operationKinds,
       suppressHeuristicWarning: this.suppressHeuristicWarning,
       useSecureLogin: this.useSecureLogin,
+      externalLoginTransport: this.externalLoginTransport,  // V1.0.12（N1）
     });
 
     const restored = user.restore();
@@ -255,6 +268,7 @@ export class DomainHostClient {
       operationKinds: this.operationKinds,
       suppressHeuristicWarning: this.suppressHeuristicWarning,
       useSecureLogin: this.useSecureLogin,
+      externalLoginTransport: this.externalLoginTransport,  // V1.0.12（N1）
     });
     // V4.8.7: 注册全局错误处理器
     if (this.globalErrorHandler) {

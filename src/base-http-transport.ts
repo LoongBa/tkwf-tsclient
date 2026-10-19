@@ -34,12 +34,18 @@ export abstract class BaseHttpTransport implements Transport {
     type: "query" | "mutation";
     variables?: Record<string, unknown>;
     sessionKey?: string;
+    bearerToken?: string;  // V1.0.12
     signal?: AbortSignal;
     selection?: string;
   }): Promise<T>;
 
   /** V4.9.20: 执行原始 GraphQL 查询字符串（QueryBuilder 使用）。 */
-  abstract executeRawGraphQL<T>(query: string, sessionKey?: string, signal?: AbortSignal): Promise<T>;
+  abstract executeRawGraphQL<T>(
+    query: string,
+    sessionKey?: string,
+    signal?: AbortSignal,
+    bearerToken?: string,  // V1.0.12: 尾参追加（源兼容）
+  ): Promise<T>;
 
   /**
    * Execute an HTTP request through the full lifecycle.

@@ -10,13 +10,21 @@ export type {
   SignHandler,
   RequestContext,
   ResponseContext,
+  ExternalLoginResult,  // V1.0.12
 } from "./transport";
 
 export { ChainablePromise } from "./chainable";
 export type { CallbackOptions } from "./chainable";
 
 export { QueryString } from "./query-string";
-export type { QueryStringFieldOptions, QueryStringSchema, ParsedResult } from "./query-string";
+export {
+  OAUTH_CALLBACK_FIELDS,           // V1.0.12
+  resolveOAuthCallback,            // V1.0.12
+} from "./query-string";
+export type {
+  QueryStringFieldOptions, QueryStringSchema, ParsedResult,
+  OAuthCallbackResult,             // V1.0.12
+} from "./query-string";
 
 export { Pager } from "./pager";
 export type { PagerOptions } from "./pager";
@@ -25,7 +33,10 @@ export { ServiceProxy } from "./service-proxy";
 export type { ServiceProxyOptions, GlobalErrorHandler } from "./service-proxy";
 
 export { DomainClientUser } from "./domain-client-user";
-export type { DomainClientUserOptions, LoginPayload, PingResult, ChallengeResponse, RegisterResult } from "./domain-client-user";
+export type {
+  DomainClientUserOptions, LoginPayload, PingResult, ChallengeResponse, RegisterResult,
+  ExternalSession,  // V1.0.12
+} from "./domain-client-user";
 
 export { DomainHostClient } from "./domain-host-client";
 export type { DomainHostClientOptions, PongHandler } from "./domain-host-client";

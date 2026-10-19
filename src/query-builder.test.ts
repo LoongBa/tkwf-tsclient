@@ -116,9 +116,9 @@ describe("QueryBuilder", () => {
       () => Promise.resolve(new Response()),
     );
     resetQueryBuilderRegistry(); // 每次测试前重置注册表，隔离测试污染
-    // 重新注册 MockEntity
-    registerQueryBuilder("MockEntity", (transport, field, sessionKey) =>
-      new MockEntityQueryBuilder(transport, field, sessionKey));
+    // 重新注册 MockEntity（V1.0.12：转发第 4 参 bearerToken——codegen 工厂须同步更新以支持 JWT 会话透传）
+    registerQueryBuilder("MockEntity", (transport, field, sessionKey, bearerToken) =>
+      new MockEntityQueryBuilder(transport, field, sessionKey, bearerToken));
   });
 
   afterEach(() => {
@@ -271,6 +271,7 @@ describe("QueryBuilder", () => {
       expect.stringContaining("mockEntity(first: 100"),
       "sk_test",
       undefined,
+      undefined,  // V1.0.12: 尾参 bearerToken（无 JWT 会话时为 undefined）
     );
     expect(result).toEqual([{ id: 1, userName: "admin" }]);
   });
@@ -513,11 +514,13 @@ describe("QueryBuilder", () => {
     } as any);
     const qb = createQueryBuilder<MockEntity>("MockEntity", transport);
     qb.where(x => x.status.eq("Active"));
-    const count = await qb.countAsync();
+const count = await qb.countAsync();
     expect(count).toBe(42);
     expect(transport.executeRawGraphQL).toHaveBeenCalledWith(
       expect.stringContaining("totalCount"),
       undefined,
+      undefined,
+      undefined,  // V1.0.12: 尾参 bearerToken（无 JWT 会话时为 undefined）
     );
   });
 
@@ -761,5 +764,33 @@ describe("QueryBuilder", () => {
     expect(mod.AggregateResponse).toBeDefined();
     expect(mod.AggregateFieldsBuilder).toBeDefined();
     expect(mod.GroupBuilder).toBeDefined();
+  });
+
+  // V1.0.12（Oracle 代码审核 S1/M3）：JWT 会话 bearerToken 透传 + clone 继承
+  describe("V1.0.12 JWT session bearerToken propagation", () => {
+    it("bearerToken 透传到 executeRawGraphQL 第 4 尾参", async () => {
+      const transport = createMockTransport();
+      const qb = createQueryBuilder<MockEntity>("MockEntity", transport, "sk", undefined, "tk-bearer");
+      (transport as unknown as { executeRawGraphQL: ReturnType<typeof vi.fn> }).executeRawGraphQL.mockResolvedValue({
+        mockEntity: { nodes: [] },
+      });
+
+      await qb.toListAsync();
+
+      expect(transport.executeRawGraphQL).toHaveBeenCalledWith(
+        expect.stringContaining("mockEntity"),
+        "sk",
+        undefined,
+        "tk-bearer",
+      );
+    });
+
+    it("clone() 继承 _bearerToken（Oracle M3 修复）", async () => {
+      const transport = createMockTransport();
+      const qb = createQueryBuilder<MockEntity>("MockEntity", transport, "sk", undefined, "tk-bearer");
+      const cloned = qb.clone() as unknown as { _bearerToken?: string };
+
+      expect(cloned._bearerToken).toBe("tk-bearer");
+    });
   });
 });
