@@ -101,5 +101,16 @@ export function toErrorCode(
     }
   }
 
+  // V1.0.15: 开放业务码透传——REST 错误体 {"error":"<业务码>"}（DMP 免登录/建档/兑票端点契约，业务码开放集）。
+  // 置于固定状态映射与 GraphQL 解析之后（仅"未知码"场景生效，不改变既有映射）；运行时 code 可为任意业务码（断言声明语义）
+  if (responseBody) {
+    try {
+      const body = JSON.parse(responseBody);
+      if (typeof body?.error === "string" && body.error.length > 0) {
+        return body.error as ErrorCode;
+      }
+    } catch { /* ignore parse errors */ }
+  }
+
   return "UNKNOWN";
 }

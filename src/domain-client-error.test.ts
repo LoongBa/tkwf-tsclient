@@ -69,6 +69,30 @@ describe("toErrorCode", () => {
     expect(toErrorCode(200, graphqlErrors)).toBe("VALIDATION_ERROR");
   });
 
+  // V1.0.15: 开放业务码透传——REST 错误体 {"error":"<业务码>"}
+  it("passes through open business code from body.error on non-fixed 4xx (400)", () => {
+    expect(toErrorCode(400, undefined, JSON.stringify({ error: "channel_mismatch", message: "请从当前商户公众号进入" })))
+      .toBe("channel_mismatch");
+  });
+
+  it("passes through open business code on 404-shaped body when status not fixed", () => {
+    // 404 固定映射优先 → 不透传
+    expect(toErrorCode(404, undefined, JSON.stringify({ error: "tenant_mismatch" }))).toBe("NOT_FOUND");
+  });
+
+  it("keeps fixed status mapping priority over body.error (403/429/5xx)", () => {
+    expect(toErrorCode(403, undefined, JSON.stringify({ error: "member_disabled" }))).toBe("FORBIDDEN");
+    expect(toErrorCode(429, undefined, JSON.stringify({ error: "TICKET_RATE_LIMITED" }))).toBe("RATE_LIMITED");
+    expect(toErrorCode(502, undefined, JSON.stringify({ error: "proxy_error" }))).toBe("SERVER_ERROR");
+  });
+
+  it("ignores non-string / missing body.error and falls back to UNKNOWN", () => {
+    expect(toErrorCode(400, undefined, JSON.stringify({ error: { code: "x" } }))).toBe("UNKNOWN");
+    expect(toErrorCode(400, undefined, JSON.stringify({ message: "plain" }))).toBe("UNKNOWN");
+    expect(toErrorCode(400, undefined, "not-json{")).toBe("UNKNOWN");
+    expect(toErrorCode(400)).toBe("UNKNOWN");
+  });
+
   it("returns FORBIDDEN for status 403", () => {
     expect(toErrorCode(403)).toBe("FORBIDDEN");
   });

@@ -116,7 +116,8 @@ export abstract class BaseHttpTransport implements Transport {
       if (response.status === 429)
         throw new DomainClientError("Rate limited", "RATE_LIMITED");
       if (!response.ok) {
-        const errCode = toErrorCode(response.status);
+        // V1.0.15: 传入 bodyText 供 toErrorCode 开放业务码透传（400/403 的 {"error":"<code>"} 此前被丢弃恒 UNKNOWN）
+        const errCode = toErrorCode(response.status, undefined, bodyText);
         throw new DomainClientError(`HTTP ${response.status}`, errCode);
       }
 
