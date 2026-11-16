@@ -311,6 +311,47 @@ Tkwf.configure("default", {
 > ⚠️ **错误语义分层**：access 过期（401）→ `AUTH_EXPIRED`（refresh 可能仍有效，可调 `refreshJwt()`
 > 续期）；refresh 失效（4xx）→ `JWT_SESSION_INVALID`（需重新登录，SDK 已清会话）。
 
+### 短信门禁流（SmsCode+Captcha，V1.1.0）
+
+对接 SmsCode/Captcha 扩展的短信门禁流（DMP 商户域三端点）——**wire 键 `chaptcha` 与 captchaToken
+`"{challengeId}:{answer}"` 拼装由 SDK 单点保证**（消费方零拼写陷阱）：
+
+```typescript
+const guest = Tkwf.Guest;
+
+// ① 取 CAPTCHA 题（payload 图形码交由前端渲染）
+const chaptcha = await guest.issueChaptcha();                 // { challengeId, payload, ttlSeconds }
+// ② 发送短信码（组串内化：内部拼 "{challengeId}:{answer}"，wire 键 chaptcha）
+const sent = await guest.sendSmsCode(mobile, chaptcha.challengeId, userAnswer);  // { sent, retryAfterSeconds }
+//    429 → err.code = "RATE_LIMITED" 且 err.retryAfterSeconds 可驱动倒计时
+// ③ 验证码登录——泛型返回（DMP IdentitySession 属消费方契约，SDK 不持久化、不建会话）
+const session = await guest.loginBySmsCode<IdentitySession>(mobile, smsCode);
+```
+
+> 三端点默认 `/api/auth/sms/*`（REST 路径前缀映射）；DMP 形态 `/m/{mid}/api/auth/sms/*`
+> 经 `restUrlMap` 覆盖（如 `urlMap: { "auth/sms/send-code": "/m/123/api/auth/sms/send-code" }`）。
+> **仅 REST 传输可用**（GraphQL 下抛 `EXTERNAL_LOGIN_FAILED`——fail-closed 拒绝）。
+
+### 票据族（V1.1.0）
+
+```typescript
+// 票据 SPA 兑现（事件免登落地页）：成功建 JWT 会话（与外部 IdP 登录同形态）
+const t = await Tkwf.Guest.loginByTicket(ticket, channelId?);
+//    400 TICKET_INVALID（统一判因，无 EXPIRED/USED 细分）/ ACCOUNT_FROZEN → 经 errorCode 透传可达
+
+// 业务兑票（服务端到服务端）：不建会话不发 token，返 FederatedTicketPayload 明文
+const payload = await Tkwf.Guest.redeemTicket(ticket);
+//    冻结/禁用 → 400 ACCOUNT_FROZEN / ACCOUNT_DISABLED（**非 403**——按 errorCode 分支而非状态码）
+
+// 票据换令牌 PKCE：verifier 显式回传——签发/授权侧 randomCodeVerifier() 生成并自持
+import { randomCodeVerifier } from "@tkwf/tsclient";
+const verifier = randomCodeVerifier();                        // RFC 7636 unreserved 43 位
+const session = await Tkwf.Guest.exchangeTicket(ticket, verifier, appId, state?);
+```
+
+> 票据族走 REST 能力通道（默认 `/api/auth/login/ticket`、`/api/auth/login/ticket/redeem`、
+> `/api/auth/ticket/exchange`，均可经 `urlMap` 覆盖）；仅 REST 传输可用。
+
 ### 使用 `Use()` 调用 API（推荐）
 
 `Use()` 返回一个 Proxy，方法名自动映射到 GraphQL field 或 REST 端点。支持 `await`。
