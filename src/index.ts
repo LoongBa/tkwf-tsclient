@@ -36,7 +36,11 @@ export { DomainClientUser } from "./domain-client-user";
 export type {
   DomainClientUserOptions, LoginPayload, PingResult, ChallengeResponse, RegisterResult,
   ExternalSession,  // V1.0.12
+  ChaptchaChallenge, SmsCodeSendResult,  // V1.1.0
 } from "./domain-client-user";
+export type {
+  RedeemedTicketPayload,  // V1.1.0（wire 契约类型位于 transport 契约层）
+} from "./transport";
 
 export { DomainHostClient } from "./domain-host-client";
 export type { DomainHostClientOptions, PongHandler } from "./domain-host-client";
@@ -53,7 +57,7 @@ export type { TkwfConfig } from "./tkwf";
 export * from "./codegen";
 
 // V4.5
-export { AuthCrypto, pbkdf2, hmac, randomSalt, bytesToHex, hexToBytes, base64ToBytes } from "./crypto";
+export { AuthCrypto, pbkdf2, hmac, randomSalt, randomCodeVerifier, bytesToHex, hexToBytes, base64ToBytes } from "./crypto";  // randomCodeVerifier: V1.1.0
 export type { AuthCryptoApi } from "./crypto";
 
 // V4.9.20 — QueryBuilder 链式查询

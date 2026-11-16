@@ -892,5 +892,158 @@ describe("DomainClientUser", () => {
         expect(transport.execute).not.toHaveBeenCalled();
       });
     });
+
+    // ── V1.1.0: SmsCode 门禁流（缺口①）──
+    describe("V1.1.0 SmsCode 门禁流（issueChaptcha/sendSmsCode/loginBySmsCode）", () => {
+      it("守卫：无 REST 能力（refreshToken 未注册）→ EXTERNAL_LOGIN_FAILED（fail-closed 不静默发错请求）", async () => {
+        const user = new DomainClientUser({ transport, storage, storageKey: "test" });
+
+        await expect(user.issueChaptcha()).rejects.toMatchObject({ code: "EXTERNAL_LOGIN_FAILED" });
+        await expect(user.sendSmsCode("13800138000", "ch1", "abc")).rejects.toMatchObject({ code: "EXTERNAL_LOGIN_FAILED" });
+        await expect(user.loginBySmsCode("13800138000", "123456")).rejects.toMatchObject({ code: "EXTERNAL_LOGIN_FAILED" });
+        expect(transport.execute).not.toHaveBeenCalled();
+      });
+
+      it("issueChaptcha 正路径：execute field auth/sms/chaptcha + 空 variables（取题 body {}）", async () => {
+        (transport as Transport).refreshToken = vi.fn();
+        vi.mocked(transport.execute).mockResolvedValue({ challengeId: "ch1", payload: "<svg/>", ttlSeconds: 300 });
+        const user = new DomainClientUser({ transport, storage, storageKey: "test" });
+
+        const result = await user.issueChaptcha();
+
+        expect(transport.execute).toHaveBeenCalledWith(
+          expect.objectContaining({ field: "auth/sms/chaptcha", type: "mutation", variables: {} }),
+        );
+        expect(result).toEqual({ challengeId: "ch1", payload: "<svg/>", ttlSeconds: 300 });
+      });
+
+      it("sendSmsCode 组串内化：SDK 拼 {challengeId}:{answer}，wire 键 chaptcha（非 captcha）", async () => {
+        (transport as Transport).refreshToken = vi.fn();
+        vi.mocked(transport.execute).mockResolvedValue({ sent: true, retryAfterSeconds: 60 });
+        const user = new DomainClientUser({ transport, storage, storageKey: "test" });
+
+        const result = await user.sendSmsCode("13800138000", "ch1", "Ab3");
+
+        expect(transport.execute).toHaveBeenCalledWith(
+          expect.objectContaining({
+            field: "auth/sms/send-code",
+            variables: { mobile: "13800138000", chaptcha: "ch1:Ab3" },
+          }),
+        );
+        expect(result).toEqual({ sent: true, retryAfterSeconds: 60 });
+      });
+
+      it("sendSmsCode 缺参 → INVALID_ARGUMENT（守卫不送服务端）", async () => {
+        (transport as Transport).refreshToken = vi.fn();
+        const user = new DomainClientUser({ transport, storage, storageKey: "test" });
+
+        await expect(user.sendSmsCode("", "ch1", "ab")).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+        await expect(user.sendSmsCode("13800138000", "", "ab")).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+        expect(transport.execute).not.toHaveBeenCalled();
+      });
+
+      it("loginBySmsCode：泛型返回 DMP IdentitySession + 不持久化 SDK 会话（P1-4 契约归属）", async () => {
+        (transport as Transport).refreshToken = vi.fn();
+        interface DmpIdentitySession { assurance: string; channelType: string; nextAction?: string }
+        vi.mocked(transport.execute).mockResolvedValue({
+          assurance: "sms", channelType: "sms", nextAction: "open_vip",
+        } satisfies DmpIdentitySession);
+        const user = new DomainClientUser({ transport, storage, storageKey: "test" });
+
+        const session = await user.loginBySmsCode<DmpIdentitySession>("13800138000", "123456");
+
+        expect(transport.execute).toHaveBeenCalledWith(
+          expect.objectContaining({ field: "auth/sms/login", variables: { mobile: "13800138000", code: "123456" } }),
+        );
+        expect(session.assurance).toBe("sms");
+        expect(session.nextAction).toBe("open_vip");
+        // 不持久化：isAuthenticated 保持 false、无会话键、storage 零写入
+        expect(user.isAuthenticated).toBe(false);
+        expect(user.sessionKey).toBeNull();
+        expect(user.externalSession).toBeNull();
+        expect(storage.getItem("test")).toBeNull();
+        // 与旧 loginBySms（GraphQL mutation）区别：本方法不触发 loginBySms 字段透传
+        expect(vi.mocked(transport.execute).mock.calls[0][0].field).toBe("auth/sms/login");
+      });
+    });
+
+    // ── V1.1.0: 票据族三端点（缺口②③④）──
+    describe("V1.1.0 票据族（loginByTicket/redeemTicket/exchangeTicket）", () => {
+      it("loginByTicket 正路径：调用能力方法 {ticket, channelId} → 建立 externalSession + persist（与 loginByExternal 同型）", async () => {
+        const loginByTicket = vi.fn(async () => ({ ...extLoginResult }));
+        (transport as Transport).loginByTicket = loginByTicket;
+        const user = new DomainClientUser({ transport, storage, storageKey: "test" });
+
+        const result = await user.loginByTicket("t-1", "wechat_event");
+
+        expect(loginByTicket).toHaveBeenCalledWith(
+          expect.objectContaining({ ticket: "t-1", channelId: "wechat_event" }),
+        );
+        expect(result.accessToken).toBe(extLoginResult.accessToken);
+        expect(user.isAuthenticated).toBe(true);
+        expect(user.externalSession?.accessToken).toBe(extLoginResult.accessToken);
+        expect(user.sessionKey).toBeNull();
+        const persisted = JSON.parse(storage.getItem("test") as string);
+        expect(persisted.externalSession.accessToken).toBe(extLoginResult.accessToken);
+        expect(typeof persisted.externalSession.expiresAt).toBe("number");
+      });
+
+      it("loginByTicket 无通道能力 → EXTERNAL_LOGIN_FAILED（GraphQL transport 下守卫）", async () => {
+        const user = new DomainClientUser({ transport, storage, storageKey: "test" });
+
+        await expect(user.loginByTicket("t-1")).rejects.toMatchObject({ code: "EXTERNAL_LOGIN_FAILED" });
+        expect(user.isAuthenticated).toBe(false);
+      });
+
+      it("loginByTicket 响应缺 accessToken → JWT_SESSION_INVALID 且不建档", async () => {
+        (transport as Transport).loginByTicket = vi.fn(
+          async () => ({ access_token: "x" } as unknown as ExternalLoginResult),
+        );
+        const user = new DomainClientUser({ transport, storage, storageKey: "test" });
+
+        await expect(user.loginByTicket("t-1")).rejects.toMatchObject({ code: "JWT_SESSION_INVALID" });
+        expect(user.externalSession).toBeNull();
+        expect(user.isAuthenticated).toBe(false);
+      });
+
+      it("redeemTicket：返回 FederatedTicketPayload 明文 + 不触碰会话（不建会话不发 token 语义）", async () => {
+        const redeemTicket = vi.fn(async () => ({
+          provider: "wechat", channelType: "wechat_event", channelId: "wx123",
+          externalUserId: "openid-1", jti: "j1", extensions: { scene: "menu" },
+        }));
+        (transport as Transport).redeemTicket = redeemTicket;
+        const user = new DomainClientUser({ transport, storage, storageKey: "test" });
+
+        const payload = await user.redeemTicket("t-1");
+
+        expect(redeemTicket).toHaveBeenCalledWith(expect.objectContaining({ ticket: "t-1" }));
+        expect(payload.externalUserId).toBe("openid-1");
+        expect(payload.extensions).toEqual({ scene: "menu" });
+        expect(user.isAuthenticated).toBe(false);
+        expect(user.externalSession).toBeNull();
+        expect(storage.getItem("test")).toBeNull();
+      });
+
+      it("exchangeTicket：调用能力方法 {ticket, codeVerifier, appId, state} → 建立 externalSession", async () => {
+        const exchangeTicket = vi.fn(async () => ({ ...extLoginResult }));
+        (transport as Transport).exchangeTicket = exchangeTicket;
+        const user = new DomainClientUser({ transport, storage, storageKey: "test" });
+
+        const result = await user.exchangeTicket("t-1", "verifier-43chars", "app-1", "state-9");
+
+        expect(exchangeTicket).toHaveBeenCalledWith(
+          expect.objectContaining({ ticket: "t-1", codeVerifier: "verifier-43chars", appId: "app-1", state: "state-9" }),
+        );
+        expect(result.accessToken).toBe(extLoginResult.accessToken);
+        expect(user.externalSession?.accessToken).toBe(extLoginResult.accessToken);
+        expect(user.sessionKey).toBeNull();
+      });
+
+      it("exchangeTicket 无通道能力 → EXTERNAL_LOGIN_FAILED", async () => {
+        const user = new DomainClientUser({ transport, storage, storageKey: "test" });
+
+        await expect(user.exchangeTicket("t-1", "v", "a")).rejects.toMatchObject({ code: "EXTERNAL_LOGIN_FAILED" });
+      });
+    });
   });
 });

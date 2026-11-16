@@ -79,6 +79,22 @@ export function randomSalt(): string {
   return bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
 }
 
+/**
+ * V1.1.0: 生成 PKCE code_verifier（RFC 7636 unreserved 字符集 43 位——最小长度实现，
+ * 熵 ~258bit 足够；不可含 `:` 等保留符）。
+ * 仅在**签发/授权侧**调用并自持（换取侧回传；SDK 内部生成必不匹配）。
+ */
+export function randomCodeVerifier(): string {
+  const unreserved =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
+  const bytes = crypto.getRandomValues(new Uint8Array(43));
+  let out = "";
+  for (let i = 0; i < bytes.length; i++) {
+    out += unreserved[bytes[i] % unreserved.length];
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Encoding helpers
 // ---------------------------------------------------------------------------
@@ -114,6 +130,7 @@ export const AuthCrypto = {
   pbkdf2,
   hmac,
   randomSalt,
+  randomCodeVerifier,
   bytesToHex,
   hexToBytes,
   base64ToBytes,

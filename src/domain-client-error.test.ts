@@ -205,4 +205,42 @@ describe("toErrorCode", () => {
       expect(toErrorCode(400, graphqlErrors)).toBe("NOT_FOUND");
     });
   });
+
+  describe("V1.1.0 ProblemDetails errorCode 通用透传（P0-2 闭环）", () => {
+    it("400 + errorCode TICKET_INVALID → TICKET_INVALID（票据族不再落 UNKNOWN）", () => {
+      expect(toErrorCode(400, undefined, '{"type":"problem","errorCode":"TICKET_INVALID"}')).toBe("TICKET_INVALID");
+    });
+
+    it("400 + errorCode ACCOUNT_FROZEN / ACCOUNT_DISABLED → 原样透传（redeem 冻结/禁用 400 分支）", () => {
+      expect(toErrorCode(400, undefined, '{"errorCode":"ACCOUNT_FROZEN"}')).toBe("ACCOUNT_FROZEN");
+      expect(toErrorCode(400, undefined, '{"errorCode":"ACCOUNT_DISABLED"}')).toBe("ACCOUNT_DISABLED");
+    });
+
+    it("既有硬编码优先不回退：400 + errorCode INVALID_ARGUMENT / JWT_SESSION_INVALID 保持", () => {
+      expect(toErrorCode(400, undefined, '{"errorCode":"INVALID_ARGUMENT"}')).toBe("INVALID_ARGUMENT");
+      expect(toErrorCode(400, undefined, '{"errorCode":"JWT_SESSION_INVALID"}')).toBe("JWT_SESSION_INVALID");
+    });
+
+    it("errorCode 优先于 error：400 同时携带两键 → 取 errorCode（平台信封在 DMP 简信封之前）", () => {
+      expect(toErrorCode(400, undefined, '{"errorCode":"TICKET_INVALID","error":"rate_limited"}')).toBe("TICKET_INVALID");
+    });
+
+    it("回落：400 + errorCode 非字符串 → 走 body.error 分支（DMP 简信封不受影响）", () => {
+      expect(toErrorCode(400, undefined, '{"errorCode":123,"error":"chaptcha_failed"}')).toBe("chaptcha_failed");
+      expect(toErrorCode(400, undefined, '{"errorCode":123}')).toBe("UNKNOWN");
+    });
+
+    it("429 + errorCode TICKET_RATE_LIMITED → RATE_LIMITED（固定状态映射优先，语义等价可接受）", () => {
+      expect(toErrorCode(429, undefined, '{"errorCode":"TICKET_RATE_LIMITED"}')).toBe("RATE_LIMITED");
+    });
+
+    it("兜底：非 400 未固定状态（422）+ errorCode → 通用透传", () => {
+      expect(toErrorCode(422, undefined, '{"errorCode":"TICKET_INVALID"}')).toBe("TICKET_INVALID");
+    });
+
+    it("401 特殊分支不回退：AUTH_FAILED / AUTH_REQUIRED 识别保持", () => {
+      expect(toErrorCode(401, undefined, '{"errorCode":"AUTH_FAILED"}')).toBe("AUTH_FAILED");
+      expect(toErrorCode(401, undefined, '{"errorCode":"AUTH_REQUIRED"}')).toBe("AUTH_REQUIRED");
+    });
+  });
 });

@@ -88,6 +88,40 @@ export interface Transport {
     refreshToken: string;
     signal?: AbortSignal;
   }): Promise<ExternalLoginResult>;
+
+  // ── V1.1.0: 票据族三端点（P3 能力即注册，null 即不支持——仅 RestTransport 实现）──
+
+  /**
+   * V1.1.0: 票据 SPA 兑现——`POST {base}{urlMap["loginByTicket"] ?? "/api/auth/login/ticket"}`，
+   * body `{ ticket, channel_id }`（事件取 OpenId 链路"票 → token1"前端兑换面；null-claimant 票）。
+   */
+  loginByTicket?(input: {
+    ticket: string;
+    channelId?: string;
+    signal?: AbortSignal;
+  }): Promise<ExternalLoginResult>;
+
+  /**
+   * V1.1.0: 业务兑票——`POST {base}{urlMap["redeemTicket"] ?? "/api/auth/login/ticket/redeem"}`，
+   * body `{ ticket }`（服务端到服务端；不建会话不发 token → `FederatedTicketPayload` 明文）。
+   */
+  redeemTicket?(input: {
+    ticket: string;
+    signal?: AbortSignal;
+  }): Promise<RedeemedTicketPayload>;
+
+  /**
+   * V1.1.0: 票据换令牌 PKCE——`POST {base}{urlMap["exchangeTicket"] ?? "/api/auth/ticket/exchange"}`，
+   * body `{ ticket, code_verifier, app_id, state? }`。**verifier 显式参数**——PKCE verifier 在签发侧
+   * 确定并自持（存 hash），SDK 仅做换取侧；内部生成必不匹配（恒 TICKET_INVALID）。
+   */
+  exchangeTicket?(input: {
+    ticket: string;
+    codeVerifier: string;
+    appId: string;
+    state?: string;
+    signal?: AbortSignal;
+  }): Promise<ExternalLoginResult>;
 }
 
 /**
@@ -101,6 +135,26 @@ export interface ExternalLoginResult {
   refreshToken: string;
   tokenType: string;   // "Bearer"
   expiresIn: number;   // 秒（服务端 ExpiresIn int）
+}
+
+/**
+ * V1.1.0: 业务兑票（`POST auth/login/ticket/redeem`）→ 服务端 `FederatedTicketPayload` 明文
+ *（11 字段 + extensions；**不建会话不发 token**——业务后端持票兑 payload 自建会员会话）。
+ */
+export interface RedeemedTicketPayload {
+  provider: string;
+  channelType: string;
+  channelId: string;
+  channelAlias?: string;
+  externalUserId: string;
+  unionId?: string;
+  platformUid?: string;
+  assurance?: string;
+  iat?: number;
+  exp?: number;
+  jti?: string;
+  /** 平台扩展字典（原样透传） */
+  extensions?: Record<string, unknown>;
 }
 
 /**

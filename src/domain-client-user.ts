@@ -1,4 +1,4 @@
-import { type Transport, type ExternalLoginResult } from "./transport";
+import { type Transport, type ExternalLoginResult, type RedeemedTicketPayload } from "./transport";
 import { DomainClientError } from "./domain-client-error";
 import { ServiceProxy } from "./service-proxy";
 import type { ChainablePromise } from "./chainable";
@@ -32,6 +32,19 @@ export interface PingResult {
   isAuthenticated: boolean;
   userName?: string;
   sessionKey?: string;
+}
+
+/** V1.1.0: SmsCode+Captcha 门禁流取题结果——服务端 `POST auth/sms/chaptcha` 响应（payload 为 SVG/图片数据，交由前端渲染）。 */
+export interface ChaptchaChallenge {
+  challengeId: string;
+  payload: string;
+  ttlSeconds: number;
+}
+
+/** V1.1.0: 短信发送结果——消费方按 retryAfterSeconds 驱动倒计时（429/RATE_LIMITED 时经 DomainClientError.retryAfterSeconds 也可达）。 */
+export interface SmsCodeSendResult {
+  sent: boolean;
+  retryAfterSeconds?: number;
 }
 
 /**
@@ -250,6 +263,87 @@ export class DomainClientUser {
     return payload;
   }
 
+  // ── V1.1.0: SmsCode + Captcha 短信门禁流（缺口①；标准 execute 形态——RestTransport 经
+  //    restPathPrefix/urlMap 映射，GraphQL transport 不适用，守卫拒绝）──
+
+  /** V1.1.0: 短信门禁取 CAPTCHA 题——`POST auth/sms/chaptcha`（field 经 urlMap 可覆盖到 `/m/{mid}/api/auth/sms/...`）。payload 交由前端渲染。 */
+  async issueChaptcha(signal?: AbortSignal): Promise<ChaptchaChallenge> {
+    this.ensureRestChannel("issueChaptcha");
+    return this.transport.execute<ChaptchaChallenge>({
+      field: "auth/sms/chaptcha",
+      type: "mutation",
+      variables: {},
+      signal,
+    });
+  }
+
+  /**
+   * V1.1.0: 发送短信验证码（chaptcha 门禁凭据）——`POST auth/sms/send-code`。
+   * **组串内化**：`{challengeId}:{answer}` 格式与 wire 键 `chaptcha`（非 captcha）由 SDK 单点保证，
+   * 调用方不接触冻结格式/拼写陷阱。429 频控 → `RATE_LIMITED`（`DomainClientError.retryAfterSeconds` 驱动倒计时）。
+   */
+  async sendSmsCode(
+    mobile: string,
+    challengeId: string,
+    answer: string,
+    signal?: AbortSignal,
+  ): Promise<SmsCodeSendResult> {
+    this.ensureRestChannel("sendSmsCode");
+    if (!mobile || !challengeId || !answer) {
+      throw new DomainClientError(
+        "sendSmsCode failed: mobile, challengeId and answer are all required.",
+        "INVALID_ARGUMENT",
+      );
+    }
+    return this.transport.execute<SmsCodeSendResult>({
+      field: "auth/sms/send-code",
+      type: "mutation",
+      variables: { mobile, chaptcha: `${challengeId.trim()}:${answer.trim()}` },
+      signal,
+    });
+  }
+
+  /**
+   * V1.1.0: 短信验证码登录（DMP 门禁流终端）——`POST auth/sms/login`，body `{mobile, code}`。
+   *
+   * - **泛型返回 `T` + 不持久化 SDK 会话（P1-4）**：响应为 DMP 接入主体契约
+   *   `IdentitySession`（assurance/channelType/nextAction 等 DMP 业务概念），SDK 不内嵌——
+   *   消费方按 `T` 断言取回并自行落盘/建会话
+   * - 与旧 `loginBySms`（平台 GraphQL mutation 形态）**是两个不同契约**：本方法走 REST 门禁流端点
+   * - 400 `chaptcha_failed`/`invalid_scene`/`invalid_code` 等 → 经 `body.error` 透传（V1.0.15）可达
+   */
+  async loginBySmsCode<T = unknown>(
+    mobile: string,
+    code: string,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    this.ensureRestChannel("loginBySmsCode");
+    if (!mobile || !code) {
+      throw new DomainClientError(
+        "loginBySmsCode failed: mobile and code are both required.",
+        "INVALID_ARGUMENT",
+      );
+    }
+    return this.transport.execute<T>({
+      field: "auth/sms/login",
+      type: "mutation",
+      variables: { mobile, code },
+      signal,
+    });
+  }
+
+  /** V1.1.0: SmsCode 门禁流 REST 通道守卫（GraphQL transport 下 field 为无效文档——fail-closed 拒绝而非静默发错请求）。 */
+  private ensureRestChannel(operation: string): void {
+    const t = this.transport as Transport;
+    if (!t.refreshToken) {
+      throw new DomainClientError(
+        `SmsCode flow (${operation}) requires a REST transport. Configure transportType: 'rest' ` +
+        "or use a RestTransport instance (GraphQL transport does not map auth/sms/* fields).",
+        "EXTERNAL_LOGIN_FAILED",
+      );
+    }
+  }
+
   /** Login with auth context (supports password, SMS, QR code, token) */
   async loginByContext(
     userName: string,
@@ -300,8 +394,118 @@ export class DomainClientUser {
     // 注入通道优先（GraphQL 主传输下能力兜底，N1）
     if (this.externalLoginTransport) return this.externalLoginTransport;
     const t = this.transport as Transport;
-    if (t.loginByExternal || t.refreshToken) return t;
+    // 能力即注册：V1.0.12（loginByExternal/refreshToken）+ V1.1.0 票据族（loginByTicket/redeemTicket/exchangeTicket）
+    if (
+      t.loginByExternal || t.refreshToken ||
+      t.loginByTicket || t.redeemTicket || t.exchangeTicket
+    ) return t;
     return null;
+  }
+
+  // ── V1.1.0: 票据族三端点（缺口②③④；RestTransport 能力方法 + urlMap——与 loginByExternal 同型）──
+
+  /**
+   * V1.1.0: 票据 SPA 兑现——`POST {prefix}/login/ticket {ticket, channel_id?}`（事件取 OpenId 链路
+   * "票 → token1"前端兑换面；仅 null-claimant 票可兑）。
+   *
+   * - 成功 → externalSession 建档（与 loginByExternal 同 wire 契约：TokenResponse → JWT 会话，N3 清旧 sessionKey）
+   * - 400 `TICKET_INVALID`（统一判因，无 EXPIRED/USED 细分）/`ACCOUNT_FROZEN`/`ACCOUNT_DISABLED` →
+   *   errorCode 透传（P0-2 闭环）；**票消费后重试恒 TICKET_INVALID**——UI 引导重新触发取票流
+   * - 429 `TICKET_RATE_LIMITED` → `RATE_LIMITED`（语义等价）；503 `TICKET_SERVICE_NOT_CONFIGURED` → 透传
+   */
+  async loginByTicket(
+    ticket: string,
+    channelId?: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<ExternalLoginResult> {
+    const channel = this.getExternalChannel();
+    if (!channel || !channel.loginByTicket) {
+      throw new DomainClientError(
+        "Ticket SPA redemption requires a REST channel with loginByTicket. Configure " +
+        "transportType: 'rest' (GraphQL transport does not register ticket endpoints).",
+        "EXTERNAL_LOGIN_FAILED",
+      );
+    }
+    const result = await channel.loginByTicket({ ticket, channelId, signal: options?.signal });
+    this.applyExternalSession(result, "loginByTicket");
+    return result;
+  }
+
+  /**
+   * V1.1.0: 业务兑票——`POST {prefix}/login/ticket/redeem {ticket}`（服务端到服务端）。
+   *
+   * - **不建会话不发 token**——返回 `FederatedTicketPayload` 明文（11 字段 + extensions），业务后端
+   *   持票兑 payload 自建会员会话；SDK 不触碰会话状态
+   * - 冻结/禁用 → **400 非 403**（`ACCOUNT_FROZEN`/`ACCOUNT_DISABLED` errorCode 透传——不可按状态码硬判）
+   * - 票消费边缘语义：拒绝时票已消费，重试恒 `TICKET_INVALID`（须重签票）
+   */
+  async redeemTicket(
+    ticket: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<RedeemedTicketPayload> {
+    const channel = this.getExternalChannel();
+    if (!channel || !channel.redeemTicket) {
+      throw new DomainClientError(
+        "Ticket redeem requires a REST channel with redeemTicket. Configure " +
+        "transportType: 'rest' (GraphQL transport does not register ticket endpoints).",
+        "EXTERNAL_LOGIN_FAILED",
+      );
+    }
+    return channel.redeemTicket({ ticket, signal: options?.signal });
+  }
+
+  /**
+   * V1.1.0: 票据换令牌 PKCE——`POST {prefix}/ticket/exchange {ticket, code_verifier, app_id, state?}`。
+   *
+   * - **codeVerifier 显式参数（P0-1）**：在签发/授权侧 `randomCodeVerifier()` 生成并**自持**（服务端签发
+   *   时存 hash）——内部生成必不匹配（恒 TICKET_INVALID）；换取时回传
+   * - 成功 → externalSession 建档（TokenResponse 同 loginByTicket）；冻结/禁用 400 拦截且**票不消耗**
+   *   （解冻后同票可换）
+   */
+  async exchangeTicket(
+    ticket: string,
+    codeVerifier: string,
+    appId: string,
+    state?: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<ExternalLoginResult> {
+    const channel = this.getExternalChannel();
+    if (!channel || !channel.exchangeTicket) {
+      throw new DomainClientError(
+        "Ticket exchange requires a REST channel with exchangeTicket. Configure " +
+        "transportType: 'rest' (GraphQL transport does not register ticket endpoints).",
+        "EXTERNAL_LOGIN_FAILED",
+      );
+    }
+    const result = await channel.exchangeTicket({
+      ticket,
+      codeVerifier,
+      appId,
+      state,
+      signal: options?.signal,
+    });
+    this.applyExternalSession(result, "exchangeTicket");
+    return result;
+  }
+
+  /** V1.1.0: TokenResponse → externalSession 建档（与 loginByExternal 同语义：守卫 accessToken 缺失 + N3 清旧 GraphQL 会话）。 */
+  private applyExternalSession(result: ExternalLoginResult, operation: string): void {
+    if (!result.accessToken) {
+      throw new DomainClientError(
+        `${operation} response is missing 'accessToken' (server TokenResponse wire is camelCase).`,
+        "JWT_SESSION_INVALID",
+      );
+    }
+    this.sessionKey = null;
+    this.externalSession = {
+      accessToken: result.accessToken,
+      refreshToken: result.refreshToken,
+      expiresAt: Date.now() + result.expiresIn * 1000,
+    };
+    this.isAuthenticated = true;
+    this.userName = null;
+    this.displayName = null;
+    this.persist();
   }
 
   /**

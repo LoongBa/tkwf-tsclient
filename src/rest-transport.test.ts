@@ -608,4 +608,204 @@ describe("RestTransport", () => {
       expect(headers["Authorization"]).toBe("Bearer tk-bearer");
     });
   });
+
+  describe("429 retryAfter（V1.1.0/P1-3 闭环）", () => {
+    it("body retryAfterSeconds（number）→ err.retryAfterSeconds 挂载，code 恒 RATE_LIMITED", async () => {
+      mockFetch({ error: "rate_limited", retryAfterSeconds: 60 }, 429);
+      const transport = new RestTransport({
+        url: "http://localhost:5000",
+        retry: { maxAttempts: 1, baseDelaySeconds: 0, maxDelaySeconds: 0, jitter: false, retryOn: [] },
+      });
+
+      await expect(
+        transport.execute({ field: "sms/send-code", type: "mutation", variables: { mobile: "13800138000", chaptcha: "a:b" } }),
+      ).rejects.toMatchObject({ code: "RATE_LIMITED", retryAfterSeconds: 60 });
+    });
+
+    it("body retryAfterSeconds（字符串数字）→ 数值化挂载", async () => {
+      mockFetch({ error: "rate_limited", retryAfterSeconds: "30" }, 429);
+      const transport = new RestTransport({
+        url: "http://localhost:5000",
+        retry: { maxAttempts: 1, baseDelaySeconds: 0, maxDelaySeconds: 0, jitter: false, retryOn: [] },
+      });
+
+      await expect(
+        transport.execute({ field: "sms/send-code", type: "mutation" }),
+      ).rejects.toMatchObject({ code: "RATE_LIMITED", retryAfterSeconds: 30 });
+    });
+
+    it("Retry-After 头（秒）→ 挂载（平台端点形态）", async () => {
+      mockFetch({}, 429, new Headers({ "Retry-After": "45" }));
+      const transport = new RestTransport({
+        url: "http://localhost:5000",
+        retry: { maxAttempts: 1, baseDelaySeconds: 0, maxDelaySeconds: 0, jitter: false, retryOn: [] },
+      });
+
+      await expect(
+        transport.execute({ field: "refresh", type: "mutation" }),
+      ).rejects.toMatchObject({ code: "RATE_LIMITED", retryAfterSeconds: 45 });
+    });
+
+    it("Retry-After 头（HTTP-date）→ 按时钟差计算", async () => {
+      const date = new Date(Date.now() + 70000).toUTCString();
+      mockFetch({}, 429, new Headers({ "Retry-After": date }));
+      const transport = new RestTransport({
+        url: "http://localhost:5000",
+        retry: { maxAttempts: 1, baseDelaySeconds: 0, maxDelaySeconds: 0, jitter: false, retryOn: [] },
+      });
+
+      const err = await transport.execute({ field: "x", type: "mutation" }).catch((e) => e);
+      expect(err.code).toBe("RATE_LIMITED");
+      expect(err.retryAfterSeconds).toBeGreaterThanOrEqual(69);
+      expect(err.retryAfterSeconds).toBeLessThanOrEqual(70);
+    });
+
+    it("无 body/头 retry 字段 → retryAfterSeconds undefined（code 仍 RATE_LIMITED）", async () => {
+      mockFetch({ message: "boom" }, 429);
+      const transport = new RestTransport({
+        url: "http://localhost:5000",
+        retry: { maxAttempts: 1, baseDelaySeconds: 0, maxDelaySeconds: 0, jitter: false, retryOn: [] },
+      });
+
+      await expect(
+        transport.execute({ field: "x", type: "mutation" }),
+      ).rejects.toMatchObject({ code: "RATE_LIMITED", retryAfterSeconds: undefined });
+    });
+  });
+
+  // ── V1.1.0: 票据族三端点（缺口②③④；能力方法 + urlMap）──
+  describe("票据族（V1.1.0/P0-1）", () => {
+    const loginResult = {
+      accessToken: "at1", refreshToken: "rt1", tokenType: "Bearer", expiresIn: 7200,
+    };
+
+    it("loginByTicket：默认 URL /api/auth/login/ticket + body {ticket, channel_id}（snake_case wire）", async () => {
+      const fetchMock = mockFetch(loginResult);
+      const transport = new RestTransport({ url: "http://localhost:5000" });
+
+      const result = await transport.loginByTicket({ ticket: "t-1", channelId: "wechat_event" });
+
+      const call = fetchMock.mock.calls[0];
+      expect(call[0]).toBe("http://localhost:5000/api/auth/login/ticket");
+      expect(JSON.parse((call[1] as Record<string, unknown>).body as string)).toEqual({
+        ticket: "t-1", channel_id: "wechat_event",
+      });
+      expect(result).toEqual(loginResult);
+    });
+
+    it("loginByTicket：urlMap 覆盖 + channelId 缺省不传键", async () => {
+      const fetchMock = mockFetch(loginResult);
+      const transport = new RestTransport({
+        url: "http://localhost:5000",
+        urlMap: { loginByTicket: "/m/123/api/auth/sms/../auth/login/ticket" },
+      });
+
+      await transport.loginByTicket({ ticket: "t-1" });
+
+      const call = fetchMock.mock.calls[0];
+      expect(call[0]).toBe("http://localhost:5000/m/123/api/auth/sms/../auth/login/ticket");
+      expect(JSON.parse((call[1] as Record<string, unknown>).body as string)).toEqual({ ticket: "t-1" });
+    });
+
+    it("loginByTicket 空 ticket → INVALID_ARGUMENT（守卫不送服务端）", async () => {
+      const transport = new RestTransport({ url: "http://localhost:5000" });
+      await expect(transport.loginByTicket({ ticket: "  " })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    });
+
+    it("redeemTicket：默认 URL /api/auth/login/ticket/redeem + body {ticket} → payload 明文透传", async () => {
+      const payload = {
+        provider: "wechat", channelType: "wechat_event", channelId: "wx1",
+        externalUserId: "openid-1", jti: "j1", extensions: { scene: "menu" },
+      };
+      const fetchMock = mockFetch(payload);
+      const transport = new RestTransport({ url: "http://localhost:5000" });
+
+      const result = await transport.redeemTicket({ ticket: "t-1" });
+
+      const call = fetchMock.mock.calls[0];
+      expect(call[0]).toBe("http://localhost:5000/api/auth/login/ticket/redeem");
+      expect(JSON.parse((call[1] as Record<string, unknown>).body as string)).toEqual({ ticket: "t-1" });
+      expect(result).toEqual(payload);
+    });
+
+    it("redeemTicket 400 + errorCode ACCOUNT_FROZEN → 透传（400 非 403，不可按状态码硬判）", async () => {
+      mockFetch({ errorCode: "ACCOUNT_FROZEN", detail: "frozen" }, 400);
+      const transport = new RestTransport({
+        url: "http://localhost:5000",
+        retry: { maxAttempts: 1, baseDelaySeconds: 0, maxDelaySeconds: 0, jitter: false, retryOn: [] },
+      });
+
+      await expect(transport.redeemTicket({ ticket: "t-1" })).rejects.toMatchObject({ code: "ACCOUNT_FROZEN" });
+    });
+
+    it("exchangeTicket：默认 URL /api/auth/ticket/exchange + body snake_case {ticket, code_verifier, app_id, state}", async () => {
+      const fetchMock = mockFetch(loginResult);
+      const transport = new RestTransport({ url: "http://localhost:5000" });
+
+      const result = await transport.exchangeTicket({
+        ticket: "t-1", codeVerifier: "v-43", appId: "app-1", state: "st-9",
+      });
+
+      const call = fetchMock.mock.calls[0];
+      expect(call[0]).toBe("http://localhost:5000/api/auth/ticket/exchange");
+      expect(JSON.parse((call[1] as Record<string, unknown>).body as string)).toEqual({
+        ticket: "t-1", code_verifier: "v-43", app_id: "app-1", state: "st-9",
+      });
+      expect(result).toEqual(loginResult);
+    });
+
+    it("exchangeTicket：state 缺省不传键；缺 verifier/ticket/appId → INVALID_ARGUMENT", async () => {
+      const fetchMock = mockFetch(loginResult);
+      const transport = new RestTransport({ url: "http://localhost:5000" });
+
+      await transport.exchangeTicket({ ticket: "t-1", codeVerifier: "v-43", appId: "app-1" });
+
+      expect(JSON.parse((fetchMock.mock.calls[0][1] as Record<string, unknown>).body as string)).toEqual({
+        ticket: "t-1", code_verifier: "v-43", app_id: "app-1",
+      });
+
+      await expect(transport.exchangeTicket({ ticket: "t-1", codeVerifier: "", appId: "a" }))
+        .rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+      await expect(transport.exchangeTicket({ ticket: "", codeVerifier: "v", appId: "a" }))
+        .rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+      await expect(transport.exchangeTicket({ ticket: "t", codeVerifier: "v", appId: "" }))
+        .rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+      // 守卫全部在方法层拦截，不送服务端
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // ── V1.1.0: SmsCode 门禁流 URL 映射（标准 execute + restPathPrefix/urlMap）──
+  describe("SmsCode 门禁流 URL 映射（V1.1.0）", () => {
+    it("标准 execute：field auth/sms/chaptcha → 默认 POST /api/auth/sms/chaptcha，body {}", async () => {
+      const fetchMock = mockFetch({ challengeId: "ch1", payload: "<svg/>", ttlSeconds: 300 });
+      const transport = new RestTransport({ url: "http://localhost:5000" });
+
+      await transport.execute({ field: "auth/sms/chaptcha", type: "mutation", variables: {} });
+
+      const call = fetchMock.mock.calls[0];
+      expect(call[0]).toBe("http://localhost:5000/api/auth/sms/chaptcha");
+      expect((call[1] as Record<string, unknown>).method).toBe("POST");
+      expect((call[1] as Record<string, unknown>).body).toBe("{}");
+    });
+
+    it("urlMap 覆盖 DMP 形态：auth/sms/send-code → /m/{mid}/api/auth/sms/send-code（consumers 装配端点）", async () => {
+      const fetchMock = mockFetch({ sent: true, retryAfterSeconds: 60 });
+      const transport = new RestTransport({
+        url: "http://localhost:5000",
+        urlMap: { "auth/sms/send-code": "/m/123/api/auth/sms/send-code" },
+      });
+
+      await transport.execute({
+        field: "auth/sms/send-code", type: "mutation",
+        variables: { mobile: "13800138000", chaptcha: "ch1:Ab3" },
+      });
+
+      const call = fetchMock.mock.calls[0];
+      expect(call[0]).toBe("http://localhost:5000/m/123/api/auth/sms/send-code");
+      expect((call[1] as Record<string, unknown>).body).toBe(
+        JSON.stringify({ mobile: "13800138000", chaptcha: "ch1:Ab3" }),
+      );
+    });
+  });
 });

@@ -21,12 +21,26 @@ export type ErrorCode =
 export class DomainClientError extends Error {
   readonly code: ErrorCode;
   readonly cause?: unknown;
+  /** V1.1.0（P1-3 闭环）：429 频控命中的重试等待秒数——DMP 端点读 body `retryAfterSeconds` /
+   *  平台端点读 `Retry-After` 响应头（秒或 HTTP-date）。未命中（无 body/头字段）为 undefined。
+   *  供调用方驱动倒计时（send-code 429 场景），SDK 不自动重试（RATE_LIMITED 不在默认 retryOn）。 */
+  readonly retryAfterSeconds?: number;
 
-  constructor(message: string, code: ErrorCode, cause?: unknown) {
+  constructor(
+    message: string,
+    code: ErrorCode,
+    cause?: unknown,
+    retryAfterSeconds?: number,
+  ) {
     super(message);
     this.name = "DomainClientError";
     this.code = code;
     this.cause = cause;
+    if (retryAfterSeconds !== undefined) {
+      this.retryAfterSeconds = retryAfterSeconds;
+    } else if (cause instanceof DomainClientError && cause.retryAfterSeconds !== undefined) {
+      this.retryAfterSeconds = cause.retryAfterSeconds;
+    }
   }
 }
 
@@ -67,6 +81,12 @@ export function toErrorCode(
       const body = JSON.parse(responseBody);
       if (body.errorCode === "INVALID_ARGUMENT") return "INVALID_ARGUMENT";
       if (body.errorCode === "JWT_SESSION_INVALID") return "JWT_SESSION_INVALID";
+      // V1.1.0（P0-2 闭环）：400 分支 ProblemDetails errorCode **通用透传**——票据族业务码
+      // （TICKET_INVALID / ACCOUNT_FROZEN / ACCOUNT_DISABLED 等开放集）不落 UNKNOWN。
+      // 既有两个硬编码保持优先（行为不回退）；其余 string errorCode 原样透传。
+      if (typeof body.errorCode === "string" && body.errorCode.length > 0) {
+        return body.errorCode as ErrorCode;
+      }
     } catch { /* ignore parse errors */ }
   }
   if (status === 403) return "FORBIDDEN";
@@ -99,6 +119,19 @@ export function toErrorCode(
         }
       }
     }
+  }
+
+  // V1.1.0（P0-2 闭环）：ProblemDetails（RFC 9457）errorCode **通用透传**——任意未固定映射状态
+  // （如 422）携带平台错误码时原样透传；位于 401 特殊分支与固定状态映射之后（不改变既有映射），
+  // 先于 body.error 透传（errorCode 键优先于 error 键——平台信封在 DMP 简信封之前）。
+  // 票据族 400 码已在 400 分支提前返回；此处兜底其余状态（TicketRedeem 之外、平台新端点等）。
+  if (responseBody) {
+    try {
+      const body = JSON.parse(responseBody);
+      if (typeof body?.errorCode === "string" && body.errorCode.length > 0) {
+        return body.errorCode as ErrorCode;
+      }
+    } catch { /* ignore parse errors */ }
   }
 
   // V1.0.15: 开放业务码透传——REST 错误体 {"error":"<业务码>"}（DMP 免登录/建档/兑票端点契约，业务码开放集）。

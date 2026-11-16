@@ -1,6 +1,6 @@
 import { DomainClientError } from "./domain-client-error";
 import { BaseHttpTransport } from "./base-http-transport";
-import type { RequestContext, TransportOptions, ResponseContext, ExternalLoginResult } from "./transport";
+import type { RequestContext, TransportOptions, ResponseContext, ExternalLoginResult, RedeemedTicketPayload } from "./transport";
 import { parseRpcEventEnvelope, base64UrlDecode, type RpcEventData } from "./event";
 import { QueryString } from "./query-string";
 
@@ -13,6 +13,15 @@ const DEFAULT_EXTERNAL_LOGIN_PATH = "/api/auth/login/external/{channelType}";
 
 /** 默认 refresh 端点 path（V1.0.12）——AuthCenter `POST {prefix}/refresh`。 */
 const DEFAULT_REFRESH_PATH = "/api/auth/refresh";
+
+// ── V1.1.0: 票据族默认端点 path（对齐认证中心 AuthCenter RoutePrefix 默认 `/api/auth`；均可用 urlMap 覆盖）──
+
+/** 票据 SPA 兑现（V0.10.0）——`POST {prefix}/login/ticket`。 */
+const DEFAULT_LOGIN_BY_TICKET_PATH = "/api/auth/login/ticket";
+/** 业务兑票（V0.14.0）——`POST {prefix}/login/ticket/redeem`。 */
+const DEFAULT_REDEEM_TICKET_PATH = "/api/auth/login/ticket/redeem";
+/** 票据换令牌 PKCE——`POST {prefix}/ticket/exchange`。 */
+const DEFAULT_EXCHANGE_TICKET_PATH = "/api/auth/ticket/exchange";
 
 export interface RestTransportOptions extends TransportOptions {
   /**
@@ -283,6 +292,145 @@ export class RestTransport extends BaseHttpTransport {
       }
       throw err;
     }
+  }
+
+  /**
+   * V1.1.0: 票据 SPA 兑现——`POST {base}{urlMap["loginByTicket"] ?? "/api/auth/login/ticket"}`。
+   *
+   * - body = `{ ticket, channel_id }`（snake_case wire——认证中心契约；channelId 缺省不传键）
+   * - 成功 → `ExternalLoginResult`（与 loginByExternal 同 wire 契约：camelCase TokenResponse）
+   * - 400 `TICKET_INVALID`/`ACCOUNT_FROZEN`/`ACCOUNT_DISABLED` → 经 errorCode 透传（P0-2 闭环）可达，
+   *   不按状态码硬判（400 亦可能是业务冻结/禁用）
+   */
+  async loginByTicket(input: {
+    ticket: string;
+    channelId?: string;
+    signal?: AbortSignal;
+  }): Promise<ExternalLoginResult> {
+    if (!input.ticket || !input.ticket.trim()) {
+      throw new DomainClientError(
+        "Ticket login failed: ticket must be a non-empty string.",
+        "INVALID_ARGUMENT",
+      );
+    }
+
+    const path = this.urlMap?.["loginByTicket"] ?? DEFAULT_LOGIN_BY_TICKET_PATH;
+    const url = `${this.options.url}${path}`;
+    const body: Record<string, unknown> = { ticket: input.ticket.trim() };
+    if (input.channelId) body.channel_id = input.channelId;
+
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const timestamp = new Date().toISOString();
+    const ctx: RequestContext = {
+      field: "loginByTicket",
+      type: "mutation",
+      variables: body,
+      signal: input.signal,
+      timestamp,
+    };
+
+    return this.executeHttp<ExternalLoginResult>(
+      { url, method: "POST", headers, body: JSON.stringify(body) },
+      ctx,
+    );
+  }
+
+  /**
+   * V1.1.0: 业务兑票——`POST {base}{urlMap["redeemTicket"] ?? "/api/auth/login/ticket/redeem"}`，
+   * body `{ ticket }`（服务端到服务端；不建会话不发 token）。
+   *
+   * - 成功 → `RedeemedTicketPayload` 明文（11 字段 + extensions 原样透传）
+   * - 400 `ACCOUNT_FROZEN`/`ACCOUNT_DISABLED`/`TICKET_INVALID` → errorCode 透传（400 非 403——SDK 不按状态码硬判）
+   * - 票已消费：重试恒 `TICKET_INVALID`（服务端单次消费语义——调用方须引导重新取票）
+   */
+  async redeemTicket(input: {
+    ticket: string;
+    signal?: AbortSignal;
+  }): Promise<RedeemedTicketPayload> {
+    if (!input.ticket || !input.ticket.trim()) {
+      throw new DomainClientError(
+        "Ticket redeem failed: ticket must be a non-empty string.",
+        "INVALID_ARGUMENT",
+      );
+    }
+
+    const path = this.urlMap?.["redeemTicket"] ?? DEFAULT_REDEEM_TICKET_PATH;
+    const url = `${this.options.url}${path}`;
+    const body = { ticket: input.ticket.trim() };
+
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const timestamp = new Date().toISOString();
+    const ctx: RequestContext = {
+      field: "redeemTicket",
+      type: "mutation",
+      variables: body,
+      signal: input.signal,
+      timestamp,
+    };
+
+    return this.executeHttp<RedeemedTicketPayload>(
+      { url, method: "POST", headers, body: JSON.stringify(body) },
+      ctx,
+    );
+  }
+
+  /**
+   * V1.1.0: 票据换令牌 PKCE——`POST {base}{urlMap["exchangeTicket"] ?? "/api/auth/ticket/exchange"}`，
+   * body `{ ticket, code_verifier, app_id, state? }`（snake_case wire——认证中心契约）。
+   *
+   * - **codeVerifier 显式参数（P0-1）**：verifier 在签发/授权侧生成并自持（服务端存 hash）——
+   *   内部生成必不匹配；调用方经 `randomCodeVerifier()` 生成后自持，换取时回传
+   * - 成功 → `ExternalLoginResult`；冻结/禁用 400 → errorCode 透传（票不消耗，解冻后同票可换）
+   */
+  async exchangeTicket(input: {
+    ticket: string;
+    codeVerifier: string;
+    appId: string;
+    state?: string;
+    signal?: AbortSignal;
+  }): Promise<ExternalLoginResult> {
+    if (!input.ticket || !input.ticket.trim()) {
+      throw new DomainClientError(
+        "Ticket exchange failed: ticket must be a non-empty string.",
+        "INVALID_ARGUMENT",
+      );
+    }
+    if (!input.codeVerifier || !input.codeVerifier.trim()) {
+      throw new DomainClientError(
+        "Ticket exchange failed: codeVerifier is required (generated and held at the authorize side).",
+        "INVALID_ARGUMENT",
+      );
+    }
+    if (!input.appId || !input.appId.trim()) {
+      throw new DomainClientError(
+        "Ticket exchange failed: appId is required.",
+        "INVALID_ARGUMENT",
+      );
+    }
+
+    const path = this.urlMap?.["exchangeTicket"] ?? DEFAULT_EXCHANGE_TICKET_PATH;
+    const url = `${this.options.url}${path}`;
+    const body: Record<string, unknown> = {
+      ticket: input.ticket.trim(),
+      code_verifier: input.codeVerifier.trim(),
+      app_id: input.appId.trim(),
+    };
+    if (input.state) body.state = input.state;
+
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const timestamp = new Date().toISOString();
+    const ctx: RequestContext = {
+      field: "exchangeTicket",
+      type: "mutation",
+      variables: body,
+      signal: input.signal,
+      timestamp,
+    };
+
+    return this.executeHttp<ExternalLoginResult>(
+      { url, method: "POST", headers, body: JSON.stringify(body) },
+      ctx,
+    );
   }
 
   /**
